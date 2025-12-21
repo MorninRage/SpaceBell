@@ -1084,6 +1084,7 @@ class SpaceShooterGame {
         this.maxPairsCap = 10;           // cap correlated pairs/puzzle partners
         this.enemySpawnRate = 8000; // Spawn enemy every 8 seconds in Bell mode (more time between spawns)
         this.enemyShotRate = 1500; // Enemy shoots every 1.5 seconds
+        this.maxEnemyShipsCap = 8; // Hard cap to limit Bell mode load
         
         // Survival system - Einstein's hunger and nutrition
         this.hunger = 100; // 0-100, starts at full
@@ -3551,7 +3552,7 @@ class SpaceShooterGame {
         // Cap maximum speed to prevent lag (absolute maximum of 1200)
         baseSpeed = Math.min(baseSpeed, 1200);
         
-        switch(side) {
+            switch(side) {
             case 0: // Top
                 x = Math.random() * this.canvas.width;
                 y = -20;
@@ -3576,6 +3577,39 @@ class SpaceShooterGame {
                 vx = baseSpeed;
                 vy = (Math.random() - 0.5) * 80;
                 break;
+        }
+        
+        // Try to keep spawn away from player and other obstacles to reduce instant chain reactions
+        const minPlayerDist = 140;
+        const minObstacleDist = 120;
+        let placed = false;
+        for (let attempt = 0; attempt < 6 && !placed; attempt++) {
+            let tooClose = false;
+            if (this.player) {
+                const dx = x - this.player.x;
+                const dy = y - this.player.y;
+                if (Math.hypot(dx, dy) < minPlayerDist) {
+                    tooClose = true;
+                }
+            }
+            if (!tooClose) {
+                for (let i = 0; i < this.obstacles.length; i++) {
+                    const o = this.obstacles[i];
+                    const dx = x - o.x;
+                    const dy = y - o.y;
+                    if (Math.hypot(dx, dy) < minObstacleDist + o.size * 0.5) {
+                        tooClose = true;
+                        break;
+                    }
+                }
+            }
+            if (tooClose) {
+                // jitter position and try again
+                x = Math.min(Math.max(x + (Math.random() - 0.5) * 120, -40), this.canvas.width + 40);
+                y = Math.min(Math.max(y + (Math.random() - 0.5) * 120, -40), this.canvas.height + 40);
+            } else {
+                placed = true;
+            }
         }
         
         // Determine molecule complexity based on level
@@ -7270,10 +7304,13 @@ class SpaceShooterGame {
             // Enemy shooting and spawning
             const now = Date.now();
             
-            // Spawn enemy ships - max ships based on level (1 at start, +1 every 10 levels)
-            const maxEnemyShips = Math.floor(this.level / 10) + 1; // Level 1-9: 1 ship, 10-19: 2 ships, 20-29: 3 ships, etc.
+            // Spawn enemy ships - level-based but with a hard cap and backpressure
+            const maxEnemyShips = Math.min(Math.floor(this.level / 10) + 1, this.maxEnemyShipsCap); // capped to reduce load
             
-            if (now - this.lastEnemySpawn > this.enemySpawnRate && this.enemyShips.length < maxEnemyShips) {
+            if (this.enemyShips.length >= maxEnemyShips) {
+                // Backpressure: slow down spawn attempts when at cap
+                this.lastEnemySpawn = now;
+            } else if (now - this.lastEnemySpawn > this.enemySpawnRate) {
                 this.spawnEnemyShip();
                 this.lastEnemySpawn = now;
             }
@@ -7285,7 +7322,14 @@ class SpaceShooterGame {
             const baseFireRate = 2500; // Start slower (2.5 seconds between shots)
             // Lower difficulty = slower fire rate, higher difficulty = faster fire rate
             // Inverse relationship: difficulty 0.5 = 5000ms, difficulty 2.0 = 1250ms
-            const dynamicFireRate = baseFireRate / difficulty;
+            let dynamicFireRate = baseFireRate / difficulty;
+            // Backpressure: slow enemy fire under heavy entity load
+            const loadScore = this.getEntityLoadScore();
+            if (loadScore > 50) {
+                dynamicFireRate *= 1.5;
+            } else if (loadScore > 35) {
+                dynamicFireRate *= 1.2;
+            }
             
             if (now - this.lastEnemyShot > dynamicFireRate) {
                 this.enemyShips.forEach(enemy => {
@@ -7327,6 +7371,12 @@ class SpaceShooterGame {
             bullet.x += bullet.vx * deltaTime;
             bullet.y += bullet.vy * deltaTime;
             bullet.lifetime -= deltaTime;
+                
+                // Remove if off-screen to prevent lingering bullets
+                if (bullet.x < -50 || bullet.x > this.canvas.width + 50 ||
+                    bullet.y < -50 || bullet.y > this.canvas.height + 50) {
+                    return false;
+                }
             
             // Check collision with player
             if (this.checkCollision(bullet, this.player)) {

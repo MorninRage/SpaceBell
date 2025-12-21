@@ -3109,11 +3109,15 @@ class SpaceShooterGame {
     }
 
     getPuzzleSequenceLength(completedCount = 0) {
-        if (completedCount <= 0) return 2;          // First puzzle: 2 targets
-        if (completedCount <= 2) return 3;          // Next two puzzles: 3 targets
-        if (completedCount <= 5) return 4;          // Few puzzles at 4 targets
-        // Then gradually increase, capping at 8
-        return Math.min(4 + (completedCount - 5), 8);
+        // Stay at 2 targets for the first 3 puzzles (0-2)
+        if (completedCount <= 2) return 2;
+        // Then 3 targets for the next 4 puzzles (3-6)
+        if (completedCount <= 6) return 3;
+        // Then 4 targets for the next 6 puzzles (7-12)
+        if (completedCount <= 12) return 4;
+        // After that, grow gradually toward 8 (1 step every 2 completions)
+        const extra = Math.floor((completedCount - 12) / 2); // starts at 0 when completedCount=13
+        return Math.min(4 + 1 + extra, 8); // start at 5 and cap at 8
     }
 
     // Collapse puzzle Bell pairs back to single targets when leaving Bell mode

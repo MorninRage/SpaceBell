@@ -2957,8 +2957,19 @@ class SpaceShooterGame {
     // Ensure a puzzle target is part of a Bell pair (without removing it from targets)
     ensurePuzzleTargetPaired(puzzleTarget) {
         if (!puzzleTarget) return;
-        // Cap total pairs to avoid explosion of entities in Bell mode
-        if (this.pairs.length >= this.maxPairsCap) return;
+        // Allow puzzle targets to pair even if we're at cap by evicting a non-puzzle pair
+        const isPuzzle = !!puzzleTarget.puzzleId;
+        if (this.pairs.length >= this.maxPairsCap) {
+            if (isPuzzle) {
+                // Try to free a slot by removing a non-puzzle pair
+                const before = this.pairs.length;
+                this.pairs = this.pairs.filter(p => (p.a?.puzzleId || p.b?.puzzleId));
+                // If still full, keep going to allow pairing this puzzle target even if it exceeds cap temporarily
+                // This prevents puzzle lockups in Bell mode.
+            } else {
+                return; // Non-puzzle pairs respect the cap
+            }
+        }
         // If already paired, nothing to do
         const alreadyPaired = this.pairs.some(p => p.a === puzzleTarget || p.b === puzzleTarget);
         if (alreadyPaired) return;

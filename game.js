@@ -1077,6 +1077,11 @@ class SpaceShooterGame {
         this.lastEnemyShot = 0;
         this.targetSpawnRate = 2000;
         this.obstacleSpawnRate = 3000;
+        // Performance caps to reduce late-game lag
+        this.maxObstacleCapEarly = 18;   // levels < 50
+        this.maxObstacleCapMid = 14;     // levels 50-100
+        this.maxObstacleCapLate = 12;    // levels 100+
+        this.maxPairsCap = 10;           // cap correlated pairs/puzzle partners
         this.enemySpawnRate = 8000; // Spawn enemy every 8 seconds in Bell mode (more time between spawns)
         this.enemyShotRate = 1500; // Enemy shoots every 1.5 seconds
         
@@ -2952,6 +2957,8 @@ class SpaceShooterGame {
     // Ensure a puzzle target is part of a Bell pair (without removing it from targets)
     ensurePuzzleTargetPaired(puzzleTarget) {
         if (!puzzleTarget) return;
+        // Cap total pairs to avoid explosion of entities in Bell mode
+        if (this.pairs.length >= this.maxPairsCap) return;
         // If already paired, nothing to do
         const alreadyPaired = this.pairs.some(p => p.a === puzzleTarget || p.b === puzzleTarget);
         if (alreadyPaired) return;
@@ -3488,6 +3495,12 @@ class SpaceShooterGame {
     spawnObstacle() {
         if (!this.canvas || this.canvas.width === 0) return;
         
+        // Cap obstacle count to reduce late-game lag
+        const maxObstacles = this.getMaxObstacles();
+        if (this.obstacles.length >= maxObstacles) {
+            return;
+        }
+        
         // Don't spawn regular obstacles during boss battles
         if (this.bossMode) {
             return;
@@ -3630,9 +3643,23 @@ class SpaceShooterGame {
         this.obstacles.push(obstacle);
     }
     
+    getMaxObstacles() {
+        if (this.level < 50) return this.maxObstacleCapEarly;
+        if (this.level < 100) return this.maxObstacleCapMid;
+        return this.maxObstacleCapLate;
+    }
+    
     generateMoleculeStructure(type, atomCount, baseSize) {
         const atoms = [];
         const centerRadius = baseSize * 0.3;
+        
+        // Performance: clamp atom count in late game to reduce draw calls
+        let effectiveAtomCount = atomCount;
+        if (this.level >= 150) {
+            effectiveAtomCount = Math.min(atomCount, 8);
+        } else if (this.level >= 120) {
+            effectiveAtomCount = Math.min(atomCount, 10);
+        }
         
         // Central atom
         atoms.push({
@@ -3643,11 +3670,12 @@ class SpaceShooterGame {
         });
         
         // Surrounding atoms based on molecule type
+        const count = effectiveAtomCount;
         if (type === 'simple') {
             // Simple molecules: H2O (3 atoms), CO2 (3 atoms), NH3 (4 atoms)
             const bondLength = baseSize * 0.6;
-            for (let i = 0; i < atomCount - 1; i++) {
-                const angle = (Math.PI * 2 * i) / (atomCount - 1);
+            for (let i = 0; i < count - 1; i++) {
+                const angle = (Math.PI * 2 * i) / (count - 1);
                 atoms.push({
                     x: Math.cos(angle) * bondLength,
                     y: Math.sin(angle) * bondLength,
@@ -3658,8 +3686,8 @@ class SpaceShooterGame {
         } else if (type === 'medium') {
             // Medium molecules: ring structures or branched
             const bondLength = baseSize * 0.7;
-            for (let i = 0; i < atomCount - 1; i++) {
-                const angle = (Math.PI * 2 * i) / (atomCount - 1);
+            for (let i = 0; i < count - 1; i++) {
+                const angle = (Math.PI * 2 * i) / (count - 1);
                 atoms.push({
                     x: Math.cos(angle) * bondLength,
                     y: Math.sin(angle) * bondLength,
@@ -3669,12 +3697,12 @@ class SpaceShooterGame {
             }
         } else if (type === 'complex') {
             // Complex molecules: multiple rings or chains
-            const layers = Math.ceil(Math.sqrt(atomCount - 1));
+            const layers = Math.ceil(Math.sqrt(count - 1));
             let atomIndex = 0;
-            for (let layer = 1; layer <= layers && atomIndex < atomCount - 1; layer++) {
-                const layerAtoms = Math.min(atomCount - 1 - atomIndex, layer * 2);
+            for (let layer = 1; layer <= layers && atomIndex < count - 1; layer++) {
+                const layerAtoms = Math.min(count - 1 - atomIndex, layer * 2);
                 const bondLength = baseSize * (0.4 + layer * 0.3);
-                for (let i = 0; i < layerAtoms && atomIndex < atomCount - 1; i++) {
+                for (let i = 0; i < layerAtoms && atomIndex < count - 1; i++) {
                     const angle = (Math.PI * 2 * i) / layerAtoms;
                     atoms.push({
                         x: Math.cos(angle) * bondLength,
@@ -7421,9 +7449,16 @@ class SpaceShooterGame {
                 this.spawnTarget();
                 this.lastTargetSpawn = now;
             }
-            if (now - this.lastObstacleSpawn > this.obstacleSpawnRate) {
+            const obstacleCap = this.getMaxObstacles();
+            if (this.obstacles.length >= obstacleCap) {
+                // Backpressure: slow spawns if we're over cap
+                this.lastObstacleSpawn = now;
+                this.obstacleSpawnRate = Math.min(this.obstacleSpawnRate + 200, 4000);
+            } else if (now - this.lastObstacleSpawn > this.obstacleSpawnRate) {
                 this.spawnObstacle();
                 this.lastObstacleSpawn = now;
+                // Gradually return spawn rate toward normal when under cap
+                this.obstacleSpawnRate = Math.max(this.obstacleSpawnRate - 50, 900);
             }
         }
         
@@ -7658,13 +7693,35 @@ class SpaceShooterGame {
         
         return particle;
     }
+    
+    getEntityLoadScore() {
+        // Weighted load score to approximate how busy the scene is
+        return (this.obstacles.length * 2) +
+               (this.enemyShips.length * 2) +
+               this.targets.length +
+               this.pairs.length;
+    }
+    
+    getParticleBudget() {
+        const load = this.getEntityLoadScore();
+        if (load > 50) return 250;
+        if (load > 35) return 350;
+        return 500; // default
+    }
 
     createExplosion(x, y) {
         // Check if explosions are enabled
         if (!this.settings.showExplosions) return;
         
+        // Throttle explosions under heavy load
+        const loadScore = this.getEntityLoadScore();
+        const budget = this.getParticleBudget();
+        if (this.particles.length >= budget) return;
+        
+        const particleCount = loadScore > 50 ? 6 : loadScore > 35 ? 10 : 15;
+        const coreCount = loadScore > 50 ? 2 : loadScore > 35 ? 3 : 5;
+        
         // Enhanced explosion with more particles and variety
-        const particleCount = 15;
         for (let i = 0; i < particleCount; i++) {
             const angle = (Math.PI * 2 * i) / particleCount + (Math.random() - 0.5) * 0.5;
             const speed = 150 + Math.random() * 150;
@@ -7688,7 +7745,7 @@ class SpaceShooterGame {
         }
         
         // Add some bright core particles
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < coreCount; i++) {
             // OPTIMIZATION: Use object pooling for particles
             const particle = this.createParticle(
                 x, y,

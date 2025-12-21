@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Clip Generator - Beyond Bell</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        h1 { color: #4fc3f7; }
+        .section {
+            background: #2a2a2a;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        textarea {
+            width: 100%;
+            min-height: 60px;
+            padding: 10px;
+            background: #1a1a1a;
+            color: #fff;
+            border: 1px solid #4fc3f7;
+            border-radius: 4px;
+        }
+        button {
+            background: #4fc3f7;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover { background: #29b6f6; }
+        .voice-item {
+            margin: 10px 0;
+            padding: 10px;
+            background: #333;
+            border-radius: 4px;
+        }
+        audio { width: 100%; margin-top: 10px; }
+        .download-btn {
+            background: #4caf50;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎤 Voice Clip Generator for Beyond Bell</h1>
+    <p>Use this tool to generate voice clips using your browser's built-in text-to-speech. For best quality, use ElevenLabs.io (see instructions below).</p>
+    
+    <div class="section">
+        <h2>John Bell Voice Clips</h2>
+        <div id="bellClips"></div>
+    </div>
+    
+    <div class="section">
+        <h2>Einstein Voice Clips</h2>
+        <div id="einsteinClips"></div>
+    </div>
+    
+    <div class="section">
+        <h2>Custom Text Generator</h2>
+        <textarea id="customText" placeholder="Enter text to generate speech..."></textarea>
+        <button onclick="generateCustom()">Generate Speech</button>
+        <div id="customOutput"></div>
+    </div>
+    
+    <div class="section">
+        <h2>📝 Instructions</h2>
+        <h3>For Best Quality (ElevenLabs.io):</h3>
+        <ol>
+            <li>Go to <a href="https://elevenlabs.io" target="_blank" style="color: #4fc3f7;">https://elevenlabs.io</a></li>
+            <li>Sign up for free account (10,000 characters/month)</li>
+            <li>Use the text-to-speech interface</li>
+            <li>Copy the texts from below into ElevenLabs</li>
+            <li>Download as MP3, convert to OGG</li>
+            <li>Place in <code>bell-game/voice/bell/</code> or <code>bell-game/voice/einstein/</code> folders</li>
+        </ol>
+        
+        <h3>Using Browser TTS (This Page):</h3>
+        <ol>
+            <li>Click "Generate" buttons below</li>
+            <li>Right-click the audio player</li>
+            <li>Select "Save audio as..." or use browser dev tools to download</li>
+            <li>Convert to OGG format using Audacity or online converter</li>
+            <li>Place in appropriate voice folders</li>
+        </ol>
+    </div>
+
+    <script>
+        const bellTexts = [
+            "Quantum mechanics reveals hidden variables that Einstein missed.",
+            "Einstein's objections must be addressed through experiment.",
+            "The statistical nature of quantum theory is fundamental, not incomplete.",
+            "Bell's theorem proves that quantum mechanics is non-local.",
+            "Quantum entanglement defies all classical understanding of physics.",
+            "Einstein was wrong about the completeness of quantum mechanics.",
+            "The quantum world operates on probability, not determinism."
+        ];
+        
+        const einsteinTexts = [
+            "Quantum mechanics is incomplete. It cannot describe individual systems.",
+            "God does not play dice. The universe follows deterministic laws.",
+            "The theory must describe individual systems, not just ensembles.",
+            "Hidden variables must exist to explain quantum behavior.",
+            "Reality cannot be purely statistical. There must be underlying causes.",
+            "A complete description of individual systems is necessary for physics."
+        ];
+        
+        function generateVoice(text, speaker, index) {
+            return new Promise((resolve) => {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 0.82;
+                utterance.pitch = speaker === 'einstein' ? 0.7 : 0.92;
+                utterance.volume = 0.85;
+                
+                const voices = speechSynthesis.getVoices();
+                let bestVoice = voices.find(v => v.name.toLowerCase().includes('neural') && v.lang.includes('en'));
+                if (!bestVoice) {
+                    bestVoice = voices.find(v => v.name.includes('Google') && v.lang.includes('en'));
+                }
+                if (!bestVoice) {
+                    bestVoice = voices.find(v => (v.name.includes('Microsoft') || v.name.includes('Zira') || v.name.includes('David')) && v.lang.includes('en'));
+                }
+                if (!bestVoice) {
+                    bestVoice = voices.find(v => v.lang.includes('en'));
+                }
+                
+                if (bestVoice) {
+                    utterance.voice = bestVoice;
+                }
+                
+                // Record audio using MediaRecorder API
+                const mediaStreamDestination = new (window.AudioContext || window.webkitAudioContext)().createMediaStreamDestination();
+                const mediaRecorder = new MediaRecorder(mediaStreamDestination.stream);
+                const chunks = [];
+                
+                mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(chunks, { type: 'audio/webm' });
+                    const url = URL.createObjectURL(blob);
+                    resolve(url);
+                };
+                
+                // Use Web Audio API to capture speech
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                // For now, just use speechSynthesis and provide download link
+                utterance.onend = () => {
+                    // Create a simple audio element for playback
+                    resolve(null);
+                };
+                
+                speechSynthesis.speak(utterance);
+            });
+        }
+        
+        function createVoiceItem(text, speaker, index) {
+            const div = document.createElement('div');
+            div.className = 'voice-item';
+            div.innerHTML = `
+                <strong>${speaker === 'bell' ? 'Bell' : 'Einstein'} ${index + 1}:</strong><br>
+                <em>${text}</em><br>
+                <button onclick="playVoice('${text.replace(/'/g, "\\'")}', '${speaker}', ${index})">Generate & Play</button>
+                <audio id="audio_${speaker}_${index}" controls style="display:none;"></audio>
+            `;
+            return div;
+        }
+        
+        function playVoice(text, speaker, index) {
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 0.82;
+            utterance.pitch = speaker === 'einstein' ? 0.7 : 0.92;
+            utterance.volume = 0.85;
+            
+            const voices = speechSynthesis.getVoices();
+            let bestVoice = voices.find(v => v.name.toLowerCase().includes('neural') && v.lang.includes('en'));
+            if (!bestVoice) {
+                bestVoice = voices.find(v => v.name.includes('Google') && v.lang.includes('en'));
+            }
+            if (!bestVoice) {
+                bestVoice = voices.find(v => (v.name.includes('Microsoft') || v.name.includes('Zira') || v.name.includes('David') || v.name.includes('Samantha') || v.name.includes('Alex')) && v.lang.includes('en'));
+            }
+            if (!bestVoice) {
+                bestVoice = voices.find(v => v.lang.includes('en'));
+            }
+            
+            if (bestVoice) {
+                utterance.voice = bestVoice;
+            }
+            
+            speechSynthesis.speak(utterance);
+        }
+        
+        function generateCustom() {
+            const text = document.getElementById('customText').value;
+            if (!text) return;
+            playVoice(text, 'bell', 999);
+        }
+        
+        // Load voices and populate UI
+        window.addEventListener('load', () => {
+            // Wait for voices to load
+            if (speechSynthesis.getVoices().length === 0) {
+                speechSynthesis.onvoiceschanged = populateUI;
+            } else {
+                populateUI();
+            }
+        });
+        
+        function populateUI() {
+            const bellDiv = document.getElementById('bellClips');
+            const einsteinDiv = document.getElementById('einsteinClips');
+            
+            bellTexts.forEach((text, i) => {
+                bellDiv.appendChild(createVoiceItem(text, 'bell', i));
+            });
+            
+            einsteinTexts.forEach((text, i) => {
+                einsteinDiv.appendChild(createVoiceItem(text, 'einstein', i));
+            });
+        }
+    </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+

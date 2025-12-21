@@ -1,0 +1,2163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Beyond Bell: Space Shooter - Ensemble vs Individual Systems</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+        
+        /* Allow text selection in input fields */
+        input, textarea {
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            user-select: text;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            color: #fff;
+            overflow: hidden;
+        }
+
+        #gameContainer {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+
+        #gameCanvas {
+            display: block;
+            background: #000;
+            cursor: none; /* Hide browser cursor - we draw our own */
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Enhanced Main UI Panel */
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: linear-gradient(135deg, rgba(10, 10, 30, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%);
+            padding: 22px;
+            border-radius: 12px;
+            min-width: 300px;
+            max-width: 320px;
+            backdrop-filter: blur(15px);
+            border: 2px solid #4fc3f7;
+            transition: all 0.3s ease;
+            pointer-events: none;
+            z-index: 10;
+            display: none;
+            box-shadow: 0 0 25px rgba(79, 195, 247, 0.4),
+                        0 0 50px rgba(79, 195, 247, 0.2),
+                        inset 0 0 15px rgba(79, 195, 247, 0.1);
+        }
+
+        #ui.paused {
+            display: block;
+        }
+
+        #ui.hidden {
+            opacity: 0.3;
+        }
+
+        #ui .mode-btn, #ui button {
+            pointer-events: auto;
+        }
+
+        #ui h2 {
+            margin-bottom: 18px;
+            color: #4fc3f7;
+            font-size: 1.5em;
+            text-shadow: 0 0 10px rgba(79, 195, 247, 0.8),
+                         0 0 20px rgba(79, 195, 247, 0.5),
+                         0 0 30px rgba(79, 195, 247, 0.3);
+            border-bottom: 2px solid rgba(79, 195, 247, 0.3);
+            padding-bottom: 10px;
+        }
+
+        .mode-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        /* Enhanced Mode Buttons */
+        .mode-btn {
+            flex: 1;
+            padding: 12px;
+            background: linear-gradient(135deg, #1565c0 0%, #1976d2 100%);
+            border: 2px solid #4fc3f7;
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            font-size: 0.9em;
+            box-shadow: 0 0 10px rgba(79, 195, 247, 0.3),
+                        inset 0 0 10px rgba(79, 195, 247, 0.1);
+            text-shadow: 0 0 5px rgba(255, 255, 255, 0.3);
+        }
+
+        .mode-btn:hover {
+            background: linear-gradient(135deg, #0d47a1 0%, #1565c0 100%);
+            transform: translateY(-3px);
+            box-shadow: 0 5px 20px rgba(79, 195, 247, 0.5),
+                        0 0 30px rgba(79, 195, 247, 0.3),
+                        inset 0 0 15px rgba(79, 195, 247, 0.2);
+            border-color: #81d4fa;
+        }
+
+        .mode-btn.active {
+            background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 100%);
+            box-shadow: 0 0 25px rgba(79, 195, 247, 0.8),
+                        0 0 50px rgba(79, 195, 247, 0.5),
+                        inset 0 0 20px rgba(255, 255, 255, 0.2);
+            color: #000;
+            border-color: #81d4fa;
+            text-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
+            animation: modeButtonPulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes modeButtonPulse {
+            0%, 100% { box-shadow: 0 0 25px rgba(79, 195, 247, 0.8), 0 0 50px rgba(79, 195, 247, 0.5), inset 0 0 20px rgba(255, 255, 255, 0.2); }
+            50% { box-shadow: 0 0 35px rgba(79, 195, 247, 1), 0 0 70px rgba(79, 195, 247, 0.7), inset 0 0 25px rgba(255, 255, 255, 0.3); }
+        }
+
+        .stats {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 2px solid #333;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            font-size: 0.9em;
+        }
+
+        .stat-label {
+            color: #aaa;
+        }
+
+        .stat-value {
+            color: #4fc3f7;
+            font-weight: bold;
+            text-shadow: 0 0 8px rgba(79, 195, 247, 0.6);
+        }
+
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(135deg, rgba(10, 10, 30, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%);
+            padding: 20px;
+            border-radius: 12px;
+            max-width: 400px;
+            max-height: 70vh;
+            overflow-y: auto;
+            backdrop-filter: blur(15px);
+            border: 2px solid #4fc3f7;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            z-index: 10;
+            display: none;
+            box-shadow: 0 0 25px rgba(79, 195, 247, 0.4),
+                        0 0 50px rgba(79, 195, 247, 0.2),
+                        inset 0 0 15px rgba(79, 195, 247, 0.1);
+        }
+        
+        /* Custom scrollbar for instructions panel */
+        #instructions::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        #instructions::-webkit-scrollbar-track {
+            background: rgba(79, 195, 247, 0.1);
+            border-radius: 4px;
+        }
+        
+        #instructions::-webkit-scrollbar-thumb {
+            background: #4fc3f7;
+            border-radius: 4px;
+        }
+        
+        #instructions::-webkit-scrollbar-thumb:hover {
+            background: #66d4ff;
+        }
+
+        #instructions.paused {
+            display: block;
+            pointer-events: auto;
+        }
+        
+        #instructions button {
+            pointer-events: auto;
+        }
+
+        #instructions.hidden {
+            opacity: 0.3;
+        }
+
+        #instructions h3 {
+            color: #4fc3f7;
+            margin-bottom: 10px;
+        }
+
+        #instructions p {
+            font-size: 0.85em;
+            line-height: 1.6;
+            color: #ccc;
+            margin: 5px 0;
+        }
+
+        .key {
+            background: #333;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+            color: #4fc3f7;
+        }
+
+        #theoryPanel {
+            position: absolute;
+            top: 200px;
+            right: 20px;
+            background: linear-gradient(135deg, rgba(10, 10, 30, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%);
+            padding: 20px;
+            border-radius: 12px;
+            max-width: 350px;
+            backdrop-filter: blur(15px);
+            max-height: 70vh;
+            overflow-y: auto;
+            border: 2px solid #4fc3f7;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            z-index: 10;
+            display: none;
+            box-shadow: 0 0 25px rgba(79, 195, 247, 0.4),
+                        0 0 50px rgba(79, 195, 247, 0.2),
+                        inset 0 0 15px rgba(79, 195, 247, 0.1);
+        }
+
+        #theoryPanel.paused {
+            display: block;
+        }
+
+        #theoryPanel.hidden {
+            opacity: 0.3;
+        }
+
+        #theoryPanel * {
+            pointer-events: auto;
+        }
+
+        #theoryPanel h3 {
+            color: #4fc3f7;
+            margin-bottom: 15px;
+            text-shadow: 0 0 10px #4fc3f7;
+        }
+
+        .theory-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: rgba(79, 195, 247, 0.1);
+            border-radius: 8px;
+            border-left: 3px solid #4fc3f7;
+        }
+
+        .theory-section h4 {
+            color: #4fc3f7;
+            margin-bottom: 8px;
+            font-size: 1.1em;
+        }
+
+        .theory-section p {
+            font-size: 0.9em;
+            line-height: 1.6;
+            color: #ccc;
+        }
+
+        .warning {
+            color: #ffc107;
+        }
+
+        .success {
+            color: #4caf50;
+        }
+
+        /* Enhanced Score display - only visible in level up menu */
+        #score {
+            display: none; /* Hidden by default during gameplay */
+            background: linear-gradient(135deg, rgba(10, 10, 30, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%) !important;
+            box-shadow: 0 0 30px rgba(79, 195, 247, 0.5), 
+                        0 0 60px rgba(79, 195, 247, 0.3),
+                        inset 0 0 20px rgba(79, 195, 247, 0.1);
+            border: 2px solid #4fc3f7 !important;
+            animation: scorePulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes scorePulse {
+            0%, 100% { box-shadow: 0 0 30px rgba(79, 195, 247, 0.5), 0 0 60px rgba(79, 195, 247, 0.3), inset 0 0 20px rgba(79, 195, 247, 0.1); }
+            50% { box-shadow: 0 0 40px rgba(79, 195, 247, 0.7), 0 0 80px rgba(79, 195, 247, 0.5), inset 0 0 25px rgba(79, 195, 247, 0.2); }
+        }
+        
+        /* Show score when crafting or shop UI is active (level up) */
+        body.level-up #score {
+            display: block;
+        }
+
+        #score h3 {
+            color: #4fc3f7;
+            font-size: 1.2em;
+            margin: 0 0 10px 0;
+            text-shadow: 0 0 10px rgba(79, 195, 247, 0.8),
+                         0 0 20px rgba(79, 195, 247, 0.5),
+                         0 0 30px rgba(79, 195, 247, 0.3);
+        }
+        
+        #score span {
+            color: #81d4fa;
+            text-shadow: 0 0 8px rgba(129, 212, 250, 0.6);
+        }
+
+        /* Enhanced Materials Inventory - Compact, top right corner */
+        #materialsInventory {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: linear-gradient(135deg, rgba(10, 10, 30, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%);
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 2px solid #4fc3f7;
+            backdrop-filter: blur(15px);
+            pointer-events: none;
+            z-index: 10;
+            min-width: 180px;
+            box-shadow: 0 0 20px rgba(79, 195, 247, 0.4),
+                        0 0 40px rgba(79, 195, 247, 0.2),
+                        inset 0 0 12px rgba(79, 195, 247, 0.1);
+            transition: all 0.3s ease;
+        }
+        
+        #materialsInventory:hover {
+            box-shadow: 0 0 30px rgba(79, 195, 247, 0.6),
+                        0 0 60px rgba(79, 195, 247, 0.3),
+                        inset 0 0 18px rgba(79, 195, 247, 0.15);
+        }
+
+        #materialsInventory h3 {
+            color: #4fc3f7;
+            margin: 0 0 8px 0;
+            text-shadow: 0 0 8px rgba(79, 195, 247, 0.8),
+                         0 0 16px rgba(79, 195, 247, 0.5),
+                         0 0 24px rgba(79, 195, 247, 0.3);
+            font-size: 0.95em;
+            border-bottom: 1px solid rgba(79, 195, 247, 0.3);
+            padding-bottom: 6px;
+        }
+        
+        #materialsInventory .stat-item {
+            padding: 3px 0;
+            margin: 0;
+            font-size: 0.8em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.2s ease;
+        }
+        
+        #materialsInventory .stat-item:hover {
+            color: #81d4fa;
+        }
+        
+        #materialsInventory .stat-label {
+            color: #aaa;
+            font-size: 0.85em;
+            margin-right: 8px;
+        }
+        
+        #materialsInventory .stat-value {
+            color: #4fc3f7;
+            font-weight: bold;
+            text-shadow: 0 0 6px rgba(79, 195, 247, 0.6);
+            font-size: 0.9em;
+        }
+
+        /* Weapon Wheel UI */
+        #weaponWheelUI {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            height: 400px;
+            display: none;
+            z-index: 1000;
+            pointer-events: none;
+        }
+        
+        #weaponWheelUI.active {
+            display: block;
+        }
+        
+        .weapon-wheel-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        
+        /* Enhanced Weapon Wheel Items */
+        .weapon-wheel-item {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(10, 10, 30, 0.9) 0%, rgba(26, 26, 46, 0.9) 100%);
+            border: 3px solid #4fc3f7;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            transform-origin: 200px 200px;
+            pointer-events: auto;
+            box-shadow: 0 0 15px rgba(79, 195, 247, 0.4),
+                        inset 0 0 10px rgba(79, 195, 247, 0.1);
+        }
+        
+        .weapon-wheel-item:hover {
+            background: linear-gradient(135deg, rgba(79, 195, 247, 0.4) 0%, rgba(79, 195, 247, 0.2) 100%);
+            transform: scale(1.15);
+            box-shadow: 0 0 25px rgba(79, 195, 247, 0.7),
+                        0 0 50px rgba(79, 195, 247, 0.4),
+                        inset 0 0 15px rgba(79, 195, 247, 0.2);
+            border-color: #81d4fa;
+        }
+        
+        .weapon-wheel-item.selected {
+            background: linear-gradient(135deg, rgba(79, 195, 247, 0.6) 0%, rgba(79, 195, 247, 0.4) 100%);
+            border-color: #fff;
+            box-shadow: 0 0 30px rgba(79, 195, 247, 1),
+                        0 0 60px rgba(79, 195, 247, 0.6),
+                        inset 0 0 20px rgba(255, 255, 255, 0.3);
+            transform: scale(1.25);
+            animation: weaponWheelPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes weaponWheelPulse {
+            0%, 100% { box-shadow: 0 0 30px rgba(79, 195, 247, 1), 0 0 60px rgba(79, 195, 247, 0.6), inset 0 0 20px rgba(255, 255, 255, 0.3); }
+            50% { box-shadow: 0 0 40px rgba(79, 195, 247, 1), 0 0 80px rgba(79, 195, 247, 0.8), inset 0 0 25px rgba(255, 255, 255, 0.4); }
+        }
+        
+        .weapon-wheel-item.equipped {
+            border-color: #4caf50;
+            box-shadow: 0 0 20px rgba(76, 175, 80, 0.6),
+                        inset 0 0 10px rgba(76, 175, 80, 0.2);
+        }
+        
+        .weapon-wheel-item-name {
+            font-size: 0.7em;
+            color: #fff;
+            text-align: center;
+            font-weight: bold;
+        }
+        
+        /* Enhanced Weapon Wheel Center */
+        .weapon-wheel-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(10, 10, 30, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%);
+            border: 3px solid #4fc3f7;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #4fc3f7;
+            font-weight: bold;
+            pointer-events: none;
+            box-shadow: 0 0 25px rgba(79, 195, 247, 0.6),
+                        0 0 50px rgba(79, 195, 247, 0.3),
+                        inset 0 0 20px rgba(79, 195, 247, 0.2);
+            text-shadow: 0 0 10px rgba(79, 195, 247, 0.8);
+        }
+        
+        /* Repair Selection UI */
+        /* Enhanced Repair Selection UI */
+        #repairSelectionUI {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(135deg, rgba(30, 20, 10, 0.98) 0%, rgba(46, 36, 26, 0.98) 100%);
+            padding: 25px;
+            border-radius: 15px;
+            border: 3px solid #ffc107;
+            display: none;
+            z-index: 1001;
+            min-width: 320px;
+            box-shadow: 0 0 40px rgba(255, 193, 7, 0.5),
+                        0 0 80px rgba(255, 193, 7, 0.3),
+                        inset 0 0 25px rgba(255, 193, 7, 0.1);
+            backdrop-filter: blur(20px);
+        }
+        
+        #repairSelectionUI.active {
+            display: block;
+            animation: panelFadeIn 0.4s ease-out;
+        }
+        
+        #repairSelectionUI h3 {
+            color: #ffc107;
+            margin-bottom: 18px;
+            text-align: center;
+            text-shadow: 0 0 10px rgba(255, 193, 7, 0.8),
+                         0 0 20px rgba(255, 193, 7, 0.5),
+                         0 0 30px rgba(255, 193, 7, 0.3);
+            font-size: 1.3em;
+        }
+        
+        .repair-item {
+            padding: 15px;
+            margin: 8px 0;
+            background: linear-gradient(135deg, rgba(255, 193, 7, 0.15) 0%, rgba(255, 193, 7, 0.05) 100%);
+            border: 2px solid #ffc107;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 10px rgba(255, 193, 7, 0.3),
+                        inset 0 0 10px rgba(255, 193, 7, 0.05);
+        }
+        
+        .repair-item:hover {
+            background: linear-gradient(135deg, rgba(255, 193, 7, 0.3) 0%, rgba(255, 193, 7, 0.2) 100%);
+            transform: translateX(5px);
+            box-shadow: 0 4px 15px rgba(255, 193, 7, 0.5),
+                        inset 0 0 15px rgba(255, 193, 7, 0.1);
+            border-color: #ffd54f;
+        }
+        
+        .repair-item.selected {
+            background: linear-gradient(135deg, rgba(255, 193, 7, 0.5) 0%, rgba(255, 193, 7, 0.4) 100%);
+            border-color: #fff;
+            box-shadow: 0 0 25px rgba(255, 193, 7, 0.8),
+                        0 0 50px rgba(255, 193, 7, 0.5),
+                        inset 0 0 20px rgba(255, 255, 255, 0.2);
+        }
+
+        /* Enhanced Crafting/Shop/Inventory UI Panels */
+        #craftingUI, #shopUI, #inventoryUI, #settingsUI, #tutorialUI {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(135deg, rgba(10, 10, 30, 0.98) 0%, rgba(26, 26, 46, 0.98) 100%);
+            padding: 35px;
+            border-radius: 18px;
+            border: 3px solid #4fc3f7;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+            display: none;
+            z-index: 1000;
+            box-shadow: 0 0 40px rgba(79, 195, 247, 0.5),
+                        0 0 80px rgba(79, 195, 247, 0.3),
+                        inset 0 0 25px rgba(79, 195, 247, 0.1);
+            backdrop-filter: blur(20px);
+        }
+        
+        #craftingUI.active, #shopUI.active, #inventoryUI.active, #leaderboardUI.active, #settingsUI.active, #tutorialUI.active {
+            animation: panelFadeIn 0.4s ease-out;
+        }
+        
+        @keyframes panelFadeIn {
+            from { 
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(0.9);
+            }
+            to { 
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1);
+            }
+        }
+
+        /* Enhanced Tutorial UI */
+        #tutorialUI {
+            max-width: 800px;
+            max-height: 85vh;
+            border-color: #9c27b0;
+            background: linear-gradient(135deg, rgba(30, 10, 46, 0.98) 0%, rgba(46, 26, 62, 0.98) 100%) !important;
+            box-shadow: 0 0 40px rgba(156, 39, 176, 0.5),
+                        0 0 80px rgba(156, 39, 176, 0.3),
+                        inset 0 0 25px rgba(156, 39, 176, 0.1) !important;
+        }
+
+        #craftingUI.active, #shopUI.active, #inventoryUI.active, #leaderboardUI.active, #settingsUI.active, #tutorialUI.active {
+            display: block;
+        }
+        
+        /* Tutorial Styles */
+        .tutorial-tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #4fc3f7;
+            padding-bottom: 10px;
+        }
+        
+        /* Enhanced Tutorial Tabs */
+        .tutorial-tab {
+            background: linear-gradient(135deg, rgba(156, 39, 176, 0.2) 0%, rgba(156, 39, 176, 0.1) 100%);
+            border: 2px solid #9c27b0;
+            color: #ba68c8;
+            padding: 12px 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            flex: 1;
+            min-width: 120px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(156, 39, 176, 0.3),
+                        inset 0 0 10px rgba(156, 39, 176, 0.05);
+            text-shadow: 0 0 8px rgba(186, 104, 200, 0.5);
+        }
+        
+        .tutorial-tab:hover {
+            background: linear-gradient(135deg, rgba(156, 39, 176, 0.4) 0%, rgba(156, 39, 176, 0.3) 100%);
+            transform: translateY(-3px);
+            box-shadow: 0 4px 15px rgba(156, 39, 176, 0.5),
+                        inset 0 0 15px rgba(156, 39, 176, 0.1);
+            border-color: #ba68c8;
+        }
+        
+        .tutorial-tab.active {
+            background: linear-gradient(135deg, #9c27b0 0%, #7b1fa2 100%);
+            color: #fff;
+            box-shadow: 0 0 25px rgba(156, 39, 176, 0.8),
+                        0 0 50px rgba(156, 39, 176, 0.5),
+                        inset 0 0 20px rgba(255, 255, 255, 0.2);
+            border-color: #ba68c8;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+        
+        .tutorial-content {
+            display: none;
+        }
+        
+        .tutorial-content.active {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* Enhanced Tutorial Sections */
+        .tutorial-section {
+            margin-bottom: 25px;
+            padding: 20px;
+            background: linear-gradient(135deg, rgba(156, 39, 176, 0.15) 0%, rgba(156, 39, 176, 0.05) 100%);
+            border-radius: 10px;
+            border-left: 4px solid #9c27b0;
+            box-shadow: 0 2px 10px rgba(156, 39, 176, 0.2),
+                        inset 0 0 10px rgba(156, 39, 176, 0.05);
+            transition: all 0.3s ease;
+        }
+        
+        .tutorial-section:hover {
+            background: linear-gradient(135deg, rgba(156, 39, 176, 0.25) 0%, rgba(156, 39, 176, 0.15) 100%);
+            box-shadow: 0 4px 15px rgba(156, 39, 176, 0.4),
+                        inset 0 0 15px rgba(156, 39, 176, 0.1);
+            border-left-color: #ba68c8;
+        }
+        
+        .tutorial-section h3 {
+            color: #ba68c8;
+            margin-bottom: 12px;
+            font-size: 1.3em;
+            text-shadow: 0 0 10px rgba(186, 104, 200, 0.6),
+                         0 0 20px rgba(186, 104, 200, 0.3);
+        }
+        
+        .tutorial-section h4 {
+            color: #ce93d8;
+            margin-top: 15px;
+            margin-bottom: 8px;
+            font-size: 1.1em;
+            text-shadow: 0 0 8px rgba(206, 147, 216, 0.5);
+        }
+        
+        .tutorial-section p {
+            color: #ccc;
+            line-height: 1.7;
+            margin-bottom: 10px;
+        }
+        
+        .tutorial-section ul {
+            color: #ccc;
+            margin-left: 20px;
+            margin-bottom: 10px;
+        }
+        
+        .tutorial-section li {
+            margin-bottom: 8px;
+            line-height: 1.6;
+        }
+        
+        .item-description {
+            background: rgba(156, 39, 176, 0.15);
+            border-left: 3px solid #9c27b0;
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        
+        .item-description strong {
+            color: #9c27b0;
+        }
+        
+        .tutorial-highlight {
+            background: rgba(255, 193, 7, 0.2);
+            border-left: 3px solid #ffc107;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        
+        .tutorial-tip {
+            background: rgba(76, 175, 80, 0.15);
+            border-left: 3px solid #4caf50;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        
+        /* When both crafting and shop are active (level-up), position them side by side */
+        body.level-up #craftingUI.active {
+            left: 25%;
+            transform: translate(-50%, -50%);
+            max-width: 500px;
+        }
+        
+        body.level-up #shopUI.active {
+            left: 75%;
+            transform: translate(-50%, -50%);
+            max-width: 500px;
+        }
+        
+        /* Enhanced Level Up Continue Button */
+        #levelUpContinueUI {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1001;
+            text-align: center;
+        }
+        
+        #levelUpContinueUI button {
+            background: linear-gradient(135deg, #4caf50 0%, #45a049 100%) !important;
+            border: 2px solid #66bb6a !important;
+            box-shadow: 0 0 25px rgba(76, 175, 80, 0.7),
+                        0 0 50px rgba(76, 175, 80, 0.4),
+                        inset 0 0 15px rgba(255, 255, 255, 0.2) !important;
+            transition: all 0.3s ease !important;
+            text-shadow: 0 0 8px rgba(0, 0, 0, 0.3) !important;
+        }
+        
+        #levelUpContinueUI button:hover {
+            background: linear-gradient(135deg, #45a049 0%, #388e3c 100%) !important;
+            transform: translateY(-4px) scale(1.05) !important;
+            box-shadow: 0 8px 30px rgba(76, 175, 80, 0.9),
+                        0 0 70px rgba(76, 175, 80, 0.6),
+                        inset 0 0 20px rgba(255, 255, 255, 0.3) !important;
+            border-color: #81c784 !important;
+        }
+        
+        #levelUpContinueUI button:active {
+            transform: translateY(-1px) scale(1.02) !important;
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.8),
+                        inset 0 0 10px rgba(0, 0, 0, 0.2) !important;
+        }
+        
+        /* Enhanced Leaderboard UI */
+        #leaderboardUI {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(135deg, rgba(10, 10, 30, 0.98) 0%, rgba(26, 26, 46, 0.98) 100%);
+            padding: 35px;
+            border-radius: 18px;
+            border: 3px solid #4fc3f7;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+            display: none;
+            z-index: 1000;
+            box-shadow: 0 0 40px rgba(79, 195, 247, 0.5),
+                        0 0 80px rgba(79, 195, 247, 0.3),
+                        inset 0 0 25px rgba(79, 195, 247, 0.1);
+            backdrop-filter: blur(20px);
+        }
+        
+        #leaderboardUI.active {
+            animation: panelFadeIn 0.4s ease-out;
+        }
+        
+        .leaderboard-item {
+            background: linear-gradient(135deg, rgba(79, 195, 247, 0.15) 0%, rgba(79, 195, 247, 0.05) 100%);
+            padding: 18px;
+            margin: 12px 0;
+            border-radius: 10px;
+            border-left: 4px solid #4fc3f7;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 10px rgba(79, 195, 247, 0.2),
+                        inset 0 0 10px rgba(79, 195, 247, 0.05);
+        }
+        
+        .leaderboard-item:hover {
+            background: linear-gradient(135deg, rgba(79, 195, 247, 0.25) 0%, rgba(79, 195, 247, 0.15) 100%);
+            transform: translateX(5px);
+            box-shadow: 0 4px 15px rgba(79, 195, 247, 0.4),
+                        inset 0 0 15px rgba(79, 195, 247, 0.1);
+            border-left-color: #81d4fa;
+        }
+        
+        /* Enhanced Input Fields */
+        #playerNameInput {
+            background: linear-gradient(135deg, rgba(79, 195, 247, 0.2) 0%, rgba(79, 195, 247, 0.1) 100%);
+            border: 2px solid #4fc3f7;
+            color: #fff;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 1em;
+            width: 100%;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 10px rgba(79, 195, 247, 0.3),
+                        inset 0 0 10px rgba(79, 195, 247, 0.05);
+        }
+        
+        #playerNameInput:focus {
+            outline: none;
+            border-color: #81d4fa;
+            box-shadow: 0 0 20px rgba(79, 195, 247, 0.7),
+                        0 0 40px rgba(79, 195, 247, 0.4),
+                        inset 0 0 15px rgba(79, 195, 247, 0.1);
+            background: linear-gradient(135deg, rgba(79, 195, 247, 0.3) 0%, rgba(79, 195, 247, 0.2) 100%);
+        }
+
+        .craft-section, .shop-section {
+            margin-bottom: 25px;
+        }
+
+        /* Enhanced Section Headers */
+        .craft-section h3, .shop-section h3 {
+            color: #4fc3f7;
+            margin-bottom: 18px;
+            border-bottom: 2px solid #4fc3f7;
+            padding-bottom: 12px;
+            text-shadow: 0 0 10px rgba(79, 195, 247, 0.6),
+                         0 0 20px rgba(79, 195, 247, 0.3);
+            font-size: 1.3em;
+            position: relative;
+        }
+        
+        .craft-section h3::after, .shop-section h3::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 50px;
+            height: 2px;
+            background: linear-gradient(90deg, #4fc3f7, transparent);
+            box-shadow: 0 0 10px rgba(79, 195, 247, 0.8);
+        }
+
+        /* Enhanced Craft/Shop Items */
+        .craft-item, .shop-item {
+            background: linear-gradient(135deg, rgba(79, 195, 247, 0.15) 0%, rgba(79, 195, 247, 0.05) 100%);
+            padding: 18px;
+            margin: 12px 0;
+            border-radius: 10px;
+            border-left: 4px solid #4fc3f7;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 10px rgba(79, 195, 247, 0.2),
+                        inset 0 0 10px rgba(79, 195, 247, 0.05);
+        }
+        
+        .craft-item:hover, .shop-item:hover {
+            background: linear-gradient(135deg, rgba(79, 195, 247, 0.25) 0%, rgba(79, 195, 247, 0.15) 100%);
+            transform: translateX(5px);
+            box-shadow: 0 4px 15px rgba(79, 195, 247, 0.4),
+                        inset 0 0 15px rgba(79, 195, 247, 0.1);
+            border-left-color: #81d4fa;
+        }
+
+        /* Enhanced Craft/Shop Buttons */
+        .craft-btn, .shop-btn {
+            background: linear-gradient(135deg, #ffc107 0%, #ffb300 100%);
+            color: #000;
+            border: 2px solid #ffc107;
+            padding: 12px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 0.95em;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 20px rgba(255, 193, 7, 0.6),
+                        0 0 40px rgba(255, 193, 7, 0.3),
+                        inset 0 0 10px rgba(255, 255, 255, 0.2);
+            text-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+            /* Explicit sizing to ensure all buttons are the same size */
+            min-width: 100px;
+            width: auto;
+            height: auto;
+            box-sizing: border-box;
+            /* Prevent event bubbling and text selection */
+            pointer-events: auto;
+            user-select: none;
+            /* Reset transform to prevent size differences */
+            transform: scale(1);
+        }
+
+        .craft-btn:hover, .shop-btn:hover {
+            background: linear-gradient(135deg, #ffb300 0%, #ffa000 100%);
+            transform: scale(1.08);
+            box-shadow: 0 0 30px rgba(255, 193, 7, 0.9),
+                        0 0 60px rgba(255, 193, 7, 0.5),
+                        inset 0 0 15px rgba(255, 255, 255, 0.3);
+            border-color: #ffd54f;
+        }
+
+        .craft-btn:active, .shop-btn:active {
+            transform: scale(0.95);
+            box-shadow: 0 0 15px rgba(255, 193, 7, 0.7),
+                        inset 0 0 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .craft-btn:disabled, .shop-btn:disabled {
+            background: #555;
+            cursor: not-allowed;
+            opacity: 0.5;
+            transform: scale(1) !important; /* Prevent disabled buttons from scaling */
+        }
+        
+        /* Gamepad selection highlighting */
+        .craft-btn.gamepad-selected, .shop-btn.gamepad-selected {
+            background: #ffc107;
+            color: #000;
+            box-shadow: 0 0 20px rgba(255, 193, 7, 0.8);
+            transform: scale(1.1);
+            border: 2px solid #ffc107;
+        }
+        
+        .craft-btn.gamepad-selected:disabled, .shop-btn.gamepad-selected:disabled {
+            background: #555;
+            box-shadow: 0 0 10px rgba(255, 193, 7, 0.4);
+            transform: scale(1) !important; /* Prevent disabled buttons from scaling */
+        }
+        
+        /* Ensure buttons don't interfere with each other */
+        .craft-item button, .shop-item button {
+            position: relative;
+            z-index: 1;
+            isolation: isolate; /* Create new stacking context */
+        }
+        
+        /* Cutscene Styles */
+        #cutsceneOverlay {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            background: #000 !important;
+            z-index: 20000 !important; /* Higher than dev panel (1500) and dev banner (1000) */
+            display: none;
+            overflow: hidden;
+            pointer-events: auto !important;
+        }
+        
+        #cutsceneOverlay.active {
+            display: block !important;
+        }
+        
+        #cutsceneCanvas {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            display: block !important;
+            z-index: 20000 !important; /* Same as overlay */
+            pointer-events: none !important; /* Allow clicks to pass through to overlay */
+            background: transparent !important;
+        }
+        
+        .cutscene-text {
+            position: fixed !important;
+            bottom: 30px !important;
+            left: 50% !important;
+            transform: translateX(-50%) !important;
+            text-align: center !important;
+            max-width: 80% !important;
+            padding: 20px !important;
+            background: rgba(0, 0, 0, 0.7) !important;
+            border-radius: 10px !important;
+            opacity: 0;
+            transition: opacity 0.5s;
+            z-index: 20001 !important; /* Above overlay (20000) */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+            pointer-events: none !important; /* Don't block clicks */
+            /* Color, font-size, font-weight, and text-shadow are set dynamically by JavaScript for enhanced styling */
+        }
+        
+        .cutscene-text.visible {
+            opacity: 1;
+        }
+        
+        .cutscene-skip {
+            position: absolute;
+            top: 30px;
+            right: 30px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 10px 20px;
+            border: 2px solid #4fc3f7;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+            z-index: 10002;
+            transition: all 0.3s;
+        }
+        
+        .cutscene-skip:hover {
+            background: rgba(79, 195, 247, 0.3);
+            box-shadow: 0 0 15px rgba(79, 195, 247, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <!-- Cutscene Overlay -->
+    <div id="cutsceneOverlay">
+        <canvas id="cutsceneCanvas"></canvas>
+        <div class="cutscene-text" id="cutsceneText"></div>
+        <button class="cutscene-skip" id="cutsceneSkip">Skip (Space/Enter/Double-Click)</button>
+    </div>
+    
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div id="ui">
+            <h2>Beyond Bell: Space Shooter</h2>
+            <div class="mode-selector">
+                <button class="mode-btn" id="ensembleBtn">Ensemble QM</button>
+                <button class="mode-btn active" id="individualBtn">Individual System</button>
+                <button class="mode-btn" id="bellBtn">Bell Pairs</button>
+            </div>
+            <div class="stats">
+                <div class="stat-item">
+                    <span class="stat-label">Accuracy:</span>
+                    <span class="stat-value" id="accuracyDisplay">100%</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Mode:</span>
+                    <span class="stat-value" id="modeDisplay">Individual</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Targets:</span>
+                    <span class="stat-value" id="targetCount">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Materials Inventory Panel (always visible, compact) -->
+        <div id="materialsInventory">
+            <h3>Materials</h3>
+            <div class="stat-item">
+                <span class="stat-label">Electrons:</span>
+                <span class="stat-value" id="invQuantum">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Photons:</span>
+                <span class="stat-value" id="invEnergy">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Nuclei:</span>
+                <span class="stat-value" id="invMetal">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Energy Crystals:</span>
+                <span class="stat-value" id="invCrystals">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Energy Tokens:</span>
+                <span class="stat-value" id="invTokens">0</span>
+            </div>
+        </div>
+
+        <div id="theoryPanel">
+            <h3>Theory Panel</h3>
+            <div class="theory-section">
+                <h4>Current Mode</h4>
+                <p id="currentTheory">Individual System: Your shots hit exactly where you aim. Definite, precise outcomes.</p>
+            </div>
+            <div class="theory-section">
+                <h4>Shooting Mechanics</h4>
+                <p><strong>Ensemble QM:</strong> <span class="warning">Probabilistic</span> - Shots may miss even if you aim correctly. Statistical uncertainty.</p>
+                <p><strong>Individual System:</strong> <span class="success">Deterministic</span> - Shots hit exactly where aimed. Definite outcomes.</p>
+                <p><strong>Bell Pairs:</strong> <span class="warning">Correlated</span> - Shooting one target affects its pair. Requires pairs to test.</p>
+            </div>
+        </div>
+
+        <div id="instructions">
+            <h3>Controls</h3>
+            
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Movement & Combat</h4>
+                <p><span class="key">WASD</span> or <span class="key">Arrow Keys</span> to move</p>
+                <p><span class="key">Click</span> or <span class="key">Space</span> to shoot</p>
+                <p><span class="key">Mouse</span> to aim (cursor follows mouse)</p>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Weapons</h4>
+                <p><span class="key">Tab</span> to open/close weapon wheel</p>
+                <p><span class="key">Mouse Wheel</span> (in weapon wheel) to navigate</p>
+                <p><span class="key">Click</span> weapon in wheel to equip/unequip</p>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Repair System</h4>
+                <p><span class="key">Q</span> (hold) to show repair selection</p>
+                <p><span class="key">Mouse Wheel</span> (while Q held) to select item</p>
+                <p><span class="key">Click</span> item to repair (requires hammer)</p>
+                <p><span class="key">Q</span> (tap) to equip/use hammer</p>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Game Modes</h4>
+                <p><span class="key">1</span> Ensemble Mode</p>
+                <p><span class="key">2</span> Individual Mode</p>
+                <p><span class="key">3</span> Bell Pairs Mode</p>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Items & Consumables</h4>
+                <p><span class="key">H</span> Use health pack</p>
+                <p><span class="key">X</span> Use atom split</p>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Menus</h4>
+                <p><span class="key">ESC</span> Pause / Show all panels</p>
+                <p><span class="key">E</span> Equipment/Inventory</p>
+                <p><span class="key">L</span> Leaderboard</p>
+                <p><span class="key">F11</span> Toggle fullscreen</p>
+                <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">💡 Crafting & Shop appear automatically during level-up</p>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Survival</h4>
+                <p><span class="key">C</span> Activate boost (uses methane)</p>
+                <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">Boost: +50% speed, +30% damage, invincibility</p>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Other</h4>
+                <p><span class="key">R</span> Restart game</p>
+                <p id="saveHint" style="color: #aaa; font-size: 0.85em; margin-top: 5px; display: none;">
+                    💡 Hidden sequence unlocked! Press <span class="key">V</span> to revert to 2 levels back.
+                </p>
+            </div>
+            
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #4fc3f7;">
+                <button onclick="game.showTutorial();" style="background: #9c27b0; color: #fff; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(156, 39, 176, 0.3);">
+                    📚 Tutorial & Guide
+                </button>
+                <button onclick="game.toggleSettings();" style="background: #4fc3f7; color: #000; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; margin-bottom: 10px;">
+                    ⚙️ Settings
+                </button>
+                <button onclick="game.togglePauseStore();" style="background: #ffb300; color: #000; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(255, 179, 0, 0.3);">
+                    🛒 Store (ESC/Pause)
+                </button>
+                <button id="loadSaveBtn" onclick="game.revertToSavedState();" style="background: #9c27b0; color: #fff; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; opacity: 0.5; cursor: not-allowed; display: none;" disabled>
+                    💾 Load Last Save (V) - Locked
+                </button>
+                <button onclick="downloadGame();" style="background: #4caf50; color: #fff; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 10px; box-shadow: 0 2px 5px rgba(76, 175, 80, 0.3);">
+                    📥 Download Game
+                </button>
+            </div>
+            
+            <p style="margin-top: 15px; font-size: 0.85em; color: #aaa; font-style: italic;">You've been shrunk to atomic scale! Destroy molecules, collect atomic materials, and escape the scientist's brain!</p>
+            
+        </div>
+
+        <!-- Score Display (only visible during level up) -->
+        <div id="score" style="position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 1001; background: rgba(0, 0, 0, 0.9); padding: 15px 30px; border-radius: 10px; border: 2px solid #4fc3f7; backdrop-filter: blur(10px); pointer-events: none;">
+            <h3 style="color: #4fc3f7; font-size: 1.2em; margin: 0 0 10px 0;">Score: <span id="scoreValue">0</span> | Hits: <span id="hitsValue">0</span> | Misses: <span id="missesValue">0</span></h3>
+            <div style="font-size: 0.9em; color: #4fc3f7;">
+                Top Score: <span id="topScoreDisplay">0</span> | Top Level: <span id="topLevelDisplay">1</span>
+            </div>
+        </div>
+
+        <!-- Crafting UI -->
+        <div id="craftingUI">
+            <h2 style="color: #4fc3f7; margin-bottom: 20px;">Crafting Station</h2>
+            <p style="color: #aaa; margin-bottom: 20px;" id="craftingInstructions">Available only during level-up</p>
+            
+            <div class="craft-section">
+                <h3>Weapons</h3>
+                <div id="weaponsList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Weapon Upgrades</h3>
+                <div id="weaponUpgradesList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Ships</h3>
+                <div id="shipsList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Shields</h3>
+                <div id="shieldsList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Upgrades</h3>
+                <div id="craftingUpgradesList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Consumables</h3>
+                <div id="craftingConsumablesList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Tools</h3>
+                <div id="craftingToolsList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <div id="repairList"></div>
+            </div>
+        </div>
+
+        <!-- Shop UI -->
+        <div id="shopUI">
+            <h2 id="shopTitle" style="color: #4fc3f7; margin-bottom: 20px;">Upgrade Shop</h2>
+            <p style="color: #aaa; margin-bottom: 20px;" id="shopInstructions">Available only during level-up</p>
+            <p style="color: #4fc3f7; font-size: 1.2em; margin-bottom: 20px;">Tokens: <span id="tokenDisplay">0</span></p>
+            <p style="color: #ffd54f; font-size: 1.1em; margin-top: -10px; margin-bottom: 20px;">Neurokeys: <span id="neurokeyDisplay">0</span></p>
+            
+            <div class="shop-section">
+                <h3>Stat Upgrades</h3>
+                <div id="upgradesList"></div>
+            </div>
+
+            <div class="shop-section">
+                <h3>Skins & Backgrounds</h3>
+                <div id="skinList"></div>
+            </div>
+        </div>
+        
+        <!-- Level Up Continue Button (Bottom UI) -->
+        <div id="levelUpContinueUI" style="display: none;">
+            <button onclick="game.continueFromLevelUp();" style="background: #4caf50; color: white; border: none; padding: 15px 40px; font-size: 1.3em; border-radius: 8px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4); transition: all 0.3s;">
+                Continue to Next Level
+            </button>
+        </div>
+
+        <!-- Inventory UI -->
+        <div id="inventoryUI">
+            <h2 style="color: #4fc3f7; margin-bottom: 20px;">Equipment Inventory</h2>
+            <p style="color: #aaa; margin-bottom: 20px;">Press ESC to close</p>
+            
+            <!-- Enhanced Stats Display Section -->
+            <div class="craft-section" style="margin-bottom: 25px;">
+                <h3>Player Statistics</h3>
+                <div id="playerStatsDisplay"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Weapons</h3>
+                <div id="inventoryWeaponsList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Ships</h3>
+                <div id="inventoryShipsList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Shields</h3>
+                <div id="inventoryShieldsList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Upgrades</h3>
+                <div id="inventoryUpgradesList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Consumables</h3>
+                <div id="inventoryConsumablesList"></div>
+            </div>
+            
+            <div class="craft-section">
+                <h3>Tools</h3>
+                <div id="inventoryToolsList"></div>
+            </div>
+        </div>
+
+        <!-- Tutorial UI -->
+        <div id="tutorialUI">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="color: #9c27b0; margin: 0;">📚 Game Tutorial & Guide</h2>
+                <button onclick="game.hideTutorial();" style="background: #f44336; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold;">✕ Close</button>
+            </div>
+            
+            <div class="tutorial-tabs">
+                <div class="tutorial-tab active" onclick="game.switchTutorialTab('basics')">Basics</div>
+                <div class="tutorial-tab" onclick="game.switchTutorialTab('controls')">Controls</div>
+                <div class="tutorial-tab" onclick="game.switchTutorialTab('modes')">Game Modes</div>
+                <div class="tutorial-tab" onclick="game.switchTutorialTab('survival')">Survival</div>
+                <div class="tutorial-tab" onclick="game.switchTutorialTab('weapons')">Weapons</div>
+                <div class="tutorial-tab" onclick="game.switchTutorialTab('ships')">Ships</div>
+                <div class="tutorial-tab" onclick="game.switchTutorialTab('shields')">Shields</div>
+                <div class="tutorial-tab" onclick="game.switchTutorialTab('upgrades')">Upgrades</div>
+                <div class="tutorial-tab" onclick="game.switchTutorialTab('bosses')">Bosses</div>
+            </div>
+            
+            <!-- Basics Tab -->
+            <div id="tutorial-basics" class="tutorial-content active">
+                <div class="tutorial-section">
+                    <h3>Welcome to Beyond Bell!</h3>
+                    <p>You've been shrunk to atomic scale and trapped inside a scientist's brain! Your mission is to destroy molecules, collect atomic materials, and escape by progressing through increasingly challenging levels.</p>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🎯 Core Gameplay</h3>
+                    <p><strong>Objective:</strong> Destroy particles, red molecules, and enemies to collect materials and progress through levels.</p>
+                    <ul>
+                        <li><strong>Blue Particles:</strong> Primary targets - destroy them instantly to progress (not affected by critical hits)</li>
+                        <li><strong>Red Molecules:</strong> Destructible molecules - destroy for triple resources! (affected by critical hits and RPG stats)</li>
+                        <li><strong>Enemy Ships:</strong> Appear in Bell Pairs mode - destroy for materials (affected by critical hits and RPG stats)</li>
+                        <li><strong>Bell Pairs:</strong> Correlated pairs in Bell mode - destroy instantly (not affected by critical hits)</li>
+                        <li><strong>Materials:</strong> Collect them to craft weapons, ships, and upgrades</li>
+                    </ul>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>📈 Progression System</h3>
+                    <p>As you destroy particles and molecules, you'll gain experience and level up. Each level-up triggers a menu where you can:</p>
+                    <ul>
+                        <li><strong>Craft Items:</strong> Use materials to create weapons, ships, shields, and upgrades</li>
+                        <li><strong>Buy Upgrades:</strong> Spend tokens to permanently improve your stats</li>
+                        <li><strong>Equip Items:</strong> Press E anytime to equip/unequip your crafted items</li>
+                    </ul>
+                </div>
+                
+                <div class="tutorial-tip">
+                    <strong>💡 Pro Tip:</strong> Switch between game modes to collect different materials! Each mode drops different resources.
+                </div>
+            </div>
+            
+            <!-- Controls Tab -->
+            <div id="tutorial-controls" class="tutorial-content">
+                <div class="tutorial-section">
+                    <h3>🎮 Movement & Combat</h3>
+                    <ul>
+                        <li><span class="key">WASD</span> or <span class="key">Arrow Keys</span> - Move your ship</li>
+                        <li><span class="key">Mouse</span> - Aim (cursor follows mouse position)</li>
+                        <li><span class="key">Click</span> or <span class="key">Space</span> - Shoot</li>
+                        <li><span class="key">Tab</span> - Open/close weapon wheel</li>
+                    </ul>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🎒 Inventory & Menus</h3>
+                    <ul>
+                        <li><span class="key">E</span> - Equipment/Inventory (equip items anytime)</li>
+                        <li><span class="key">ESC</span> - Pause / Show all panels</li>
+                        <li><span class="key">L</span> - Leaderboard</li>
+                    </ul>
+                    <p style="color: #aaa; font-size: 0.9em; margin-top: 8px;">💡 <strong>Note:</strong> Crafting & Upgrade Shop menus appear automatically during level-up - no need to press keys!</p>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🔧 Special Actions</h3>
+                    <ul>
+                        <li><span class="key">Q</span> (hold) - Show repair selection (requires hammer)</li>
+                        <li><span class="key">Q</span> (tap) - Equip/use hammer tool</li>
+                        <li><span class="key">H</span> - Use health pack</li>
+                        <li><span class="key">X</span> - Use atom split (clears screen)</li>
+                        <li><span class="key">1/2/3</span> - Switch game modes</li>
+                    </ul>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🍽️ Survival System Controls</h3>
+                    <ul>
+                        <li><span class="key">E</span> - Eat food (when in inventory menu, select food and press E)</li>
+                        <li><span class="key">C</span> - Activate boost (uses methane, provides speed and damage boost)</li>
+                        <li><span class="key">R</span> - Restart game (on game over screen)</li>
+                    </ul>
+                    <div class="tutorial-highlight" style="margin-top: 10px;">
+                        <strong>⚠️ Critical:</strong> If your hunger meter reaches 0, you die instantly! Keep it above 0 by eating food regularly.
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Game Modes Tab -->
+            <div id="tutorial-modes" class="tutorial-content">
+                <div class="tutorial-section">
+                    <h3>🔬 Ensemble QM Mode</h3>
+                    <p><strong>Physics Concept:</strong> Probabilistic quantum mechanics - uncertainty principle in action.</p>
+                    <p><strong>Gameplay:</strong> Shooting has built-in uncertainty. Your shots have a spread pattern, making precise targeting more challenging but rewarding.</p>
+                    <p><strong>Materials Dropped:</strong> Quantum Particles (Electrons) and Energy Crystals</p>
+                    <div class="tutorial-highlight">
+                        <strong>Best For:</strong> Farming quantum particles and crystals. Good for early-game material collection.
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>⚛️ Individual System Mode</h3>
+                    <p><strong>Physics Concept:</strong> Deterministic individual systems - precise, predictable behavior.</p>
+                    <p><strong>Gameplay:</strong> Precise, deterministic shooting. Your shots go exactly where you aim with no spread.</p>
+                    <p><strong>Materials Dropped:</strong> Energy Cores (Photons) and Metal Scraps (Nuclei)</p>
+                    <div class="tutorial-highlight">
+                        <strong>Best For:</strong> Precise combat, farming energy cores and metal scraps. Recommended for boss battles.
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🔗 Bell Pairs Mode</h3>
+                    <p><strong>Physics Concept:</strong> Quantum entanglement - correlated pairs that behave together.</p>
+                    <p><strong>Gameplay:</strong> Targets appear in correlated pairs. Destroying one affects the other. Enemy ships spawn and drop double tokens!</p>
+                    <p><strong>Materials Dropped:</strong> All materials (mixed), but <strong>double tokens</strong> from enemy ships!</p>
+                    <div class="tutorial-highlight">
+                        <strong>Best For:</strong> Token farming! Enemy ships give double tokens. Great for buying upgrades.
+                    </div>
+                </div>
+                
+                <div class="tutorial-tip">
+                    <strong>💡 Strategy:</strong> Switch modes frequently to collect all material types. Bell Pairs mode is especially valuable for token farming!
+                </div>
+            </div>
+            
+            <!-- Survival System Tab -->
+            <div id="tutorial-survival" class="tutorial-content">
+                <div class="tutorial-section">
+                    <h3>🍽️ Survival System Overview</h3>
+                    <p>Einstein needs to eat! The survival system adds a hunger mechanic that you must manage to stay alive. When survival mode is unlocked (available from the start), you'll need to collect biological components and craft food to maintain your hunger meter.</p>
+                    <div class="tutorial-highlight" style="margin-top: 15px;">
+                        <strong>⚠️ Critical Warning:</strong> If your hunger meter reaches 0, you die instantly! There is no grace period - keep it above 0 at all times.
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>📉 Hunger Mechanics</h3>
+                    <ul>
+                        <li><strong>Hunger Decay:</strong> Hunger decreases by 0.5 per second (takes 200 seconds / 3.33 minutes to go from full to empty)</li>
+                        <li><strong>Hunger Range:</strong> 0-100 (starts at 100)</li>
+                        <li><strong>Death Condition:</strong> Instant death when hunger reaches 0</li>
+                        <li><strong>Visual Indicator:</strong> Hunger meter displayed in top-left UI with color coding (green → yellow → red)</li>
+                    </ul>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🧬 Biological Components</h3>
+                    <p>When survival mode is active, destroying molecules drops biological components instead of regular materials:</p>
+                    <ul>
+                        <li><strong>ATP (25%):</strong> Energy currency - most common</li>
+                        <li><strong>Simple Sugars (30%):</strong> Carbohydrates - most common, essential for food crafting</li>
+                        <li><strong>Amino Acids (15%):</strong> Protein building blocks</li>
+                        <li><strong>Fatty Acids (10%):</strong> Lipid components</li>
+                        <li><strong>Nucleotides (6%):</strong> DNA/RNA building blocks</li>
+                        <li><strong>Vitamins (6%):</strong> Essential micronutrients - needed for balanced meals</li>
+                        <li><strong>Minerals (10%):</strong> Essential minerals - needed for super food</li>
+                    </ul>
+                    <div class="tutorial-tip" style="margin-top: 10px;">
+                        <strong>💡 Tip:</strong> Sugars are the most common drop (30%), making them easy to collect for basic food crafting!
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🍎 Food Crafting</h3>
+                    <p>Craft food items during level-up using biological components. Each food restores different amounts of hunger:</p>
+                    
+                    <div class="item-description">
+                        <strong>Basic Meal</strong>
+                        <p><strong>Cost:</strong> 5 ATP, 3 Amino Acids, 2 Sugars</p>
+                        <p><strong>Effect:</strong> Restores 20 hunger</p>
+                        <p><strong>Efficiency:</strong> 2.0 hunger per component - Good starter food</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Protein Bar</strong>
+                        <p><strong>Cost:</strong> 8 Amino Acids, 4 Sugars</p>
+                        <p><strong>Effect:</strong> Restores 35 hunger</p>
+                        <p><strong>Efficiency:</strong> 2.92 hunger per component - Best efficiency!</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Energy Drink</strong>
+                        <p><strong>Cost:</strong> 10 ATP, 6 Sugars</p>
+                        <p><strong>Effect:</strong> Restores 35 hunger, +5 methane</p>
+                        <p><strong>Efficiency:</strong> 2.19 hunger per component - Good for quick energy and methane</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Balanced Meal</strong>
+                        <p><strong>Cost:</strong> 8 ATP, 6 Amino Acids, 5 Sugars, 3 Fatty Acids, 2 Vitamins</p>
+                        <p><strong>Effect:</strong> Restores 50 hunger</p>
+                        <p><strong>Efficiency:</strong> 2.08 hunger per component - Well-rounded nutrition</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Super Food</strong>
+                        <p><strong>Cost:</strong> 15 ATP, 12 Amino Acids, 10 Sugars, 5 Fatty Acids, 4 Vitamins, 3 Minerals</p>
+                        <p><strong>Effect:</strong> Restores 100 hunger, +15 methane</p>
+                        <p><strong>Efficiency:</strong> 2.04 hunger per component - Ultimate nutrition, fills entire hunger bar!</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Methane Snack</strong>
+                        <p><strong>Cost:</strong> 3 Sugars, 2 Fatty Acids</p>
+                        <p><strong>Effect:</strong> Restores 10 hunger, +10 methane</p>
+                        <p><strong>Efficiency:</strong> 2.0 hunger per component - Quick methane boost</p>
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>⚡ Methane & Boost System</h3>
+                    <p>Eating certain foods generates methane (0-100). Methane can be used to activate a powerful boost mode:</p>
+                    <ul>
+                        <li><strong>Boost Activation:</strong> Press <span class="key">C</span> to activate boost (requires methane > 0)</li>
+                        <li><strong>Boost Effects:</strong> +50% movement speed, +30% damage, invincibility (enemy bullets pass through you)</li>
+                        <li><strong>Methane Depletion:</strong> Methane depletes at 20 per second while boosting (100 methane = 5 seconds of boost)</li>
+                        <li><strong>Cooldown:</strong> 5 second cooldown after boost ends before you can boost again</li>
+                        <li><strong>Food Sources:</strong> Energy Drink (+5), Super Food (+15), Methane Snack (+10)</li>
+                    </ul>
+                    <div class="tutorial-tip" style="margin-top: 10px;">
+                        <strong>💡 Strategy:</strong> Save methane for boss battles or tough encounters. Boost mode makes you invincible and significantly more powerful!
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🎮 Using Food</h3>
+                    <ol>
+                        <li>Open inventory menu (press <span class="key">E</span>)</li>
+                        <li>Navigate to the "Consumables" section</li>
+                        <li>Select a food item</li>
+                        <li>Press the "Eat (E)" button or press <span class="key">E</span> while food is selected</li>
+                        <li>Your hunger meter will increase immediately</li>
+                    </ol>
+                    <div class="tutorial-highlight" style="margin-top: 10px;">
+                        <strong>⚠️ Important:</strong> Always keep at least one food item in your inventory for emergencies. Hunger decays continuously, so plan ahead!
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Weapons Tab -->
+            <div id="tutorial-weapons" class="tutorial-content">
+                <div class="tutorial-section">
+                    <h3>🔫 Basic Weapons</h3>
+                    
+                    <div class="item-description">
+                        <strong>Basic Weapon</strong> (Starter)
+                        <p>Your starting weapon. Low damage (10) and slow fire rate (0.5/s), but reliable. Good for repairs since it's cheap to craft.</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Rapid Weapon</strong> (Level 3+)
+                        <p>High fire rate (1.0/s) but lower damage (8). Excellent for clearing many small targets quickly. Can be upgraded 4 times to increase fire rate even more.</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Spread Weapon</strong> (Level 5+)
+                        <p><strong>Einstein's Physics:</strong> Unlike quantum mechanics lasers that rely on probabilistic wave functions, Einstein's Spread Weapon channels probability distributions based on complete individual system descriptions. While QM lasers use ensemble statistics (uncertainty principle), this weapon uses the understanding that individual systems have definite properties, allowing precise control over the spread pattern.</p>
+                        <p><strong>Gameplay:</strong> Fires 3 bullets in a spread pattern (damage 12 each). Great for hitting multiple targets or large enemies. Upgrades increase spread count (up to 7 bullets).</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Laser Weapon</strong> (Level 10+)
+                        <p><strong>Einstein's Physics:</strong> Traditional quantum mechanics lasers work with probabilistic photon emissions and uncertain transformation times. Einstein's Laser Weapon channels definite transformation times - based on his radioactive atom example where individual atoms have exact decay times. This bypasses the Psi-function's limitation of only providing ensemble probabilities, allowing continuous, deterministic beam control.</p>
+                        <p><strong>Gameplay:</strong> Continuous beam weapon! High damage (20) with 2-second duration and 3-second cooldown. Devastating against single targets. Upgrades increase duration and damage.</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Automatic Weapon</strong> (Level 15+)
+                        <p>Very fast firing (2.0/s) with moderate damage (7). When upgraded to tier 1 (Level 50+), becomes omnidirectional - shoots in 8 directions automatically!</p>
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>⚡ High-Tier Weapons (Einstein's Physics)</h3>
+                    
+                    <div class="item-description">
+                        <strong>Transformation Predictor</strong> (Level 30+)
+                        <p><strong>Physics:</strong> Quantum mechanics can only predict transformation probabilities for ensembles - the Psi-function cannot show exact transformation times for individual systems. Einstein's Transformation Predictor uses his radioactive atom model: individual atoms have definite decay times, not just probabilities. This technology bypasses statistical QM's limitation by providing complete descriptions of individual systems, allowing precise prediction and targeting.</p>
+                        <p><strong>Gameplay:</strong> High damage (35) with good fire rate (0.8/s). Penetrates defenses and can damage bosses even during invulnerability phases. Orange projectiles.</p>
+                        <p><strong>Cost:</strong> 120/100/80/60/50 (very expensive)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Deterministic Engine</strong> (Level 50+)
+                        <p><strong>Physics:</strong> Quantum mechanics weapons rely on ensemble statistics and uncertainty - shots have probabilistic spread patterns. Einstein's Deterministic Engine uses complete individual system descriptions, providing definite properties and deterministic behavior. Unlike QM's statistical approach, this weapon channels precise, predictable projectile paths by modeling individual systems (A or B) rather than correlated pairs, sidestepping Bell's theorem entirely.</p>
+                        <p><strong>Gameplay:</strong> Devastating spread weapon! Fires 5 bullets (45 damage each) with fast fire rate (1.5/s). Purple projectiles. Perfect for crowd control and large bosses.</p>
+                        <p><strong>Cost:</strong> 180/150/120/100/80 (ultra expensive)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Individual System Core</strong> (Level 75+)
+                        <p><strong>Physics:</strong> Bell's theorem constrains quantum mechanics by showing local hidden variables are impossible - but only for correlated pairs (A and B together). Einstein's Individual System Core bypass technology works with individual systems (A or B alone), not pairs. Since Bell's logic requires measurements on both systems to test correlations, this weapon sidesteps Bell entirely by operating on individual systems with complete descriptions, achieving omnidirectional power impossible in standard QM.</p>
+                        <p><strong>Gameplay:</strong> Ultimate weapon! Massive damage (60), omnidirectional automatic firing (3.0/s), cyan projectiles. The most powerful weapon in the game.</p>
+                        <p><strong>Cost:</strong> 250/200/180/150/120 (highest tier)</p>
+                    </div>
+                </div>
+                
+                <div class="tutorial-tip">
+                    <strong>💡 Weapon Strategy:</strong> Combine multiple weapons for increased damage! All equipped weapons contribute their damage to each shot.
+                </div>
+            </div>
+            
+            <!-- Ships Tab -->
+            <div id="tutorial-ships" class="tutorial-content">
+                <div class="tutorial-section">
+                    <h3>🚀 Basic Ships</h3>
+                    
+                    <div class="item-description">
+                        <strong>Basic Ship</strong> (Starter)
+                        <p>Balanced starter ship. Speed: 150, Health: 100. Reliable and cheap to repair.</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Fast Ship</strong> (Early Tier)
+                        <p>Speed demon! Speed: 220, Health: 75. ⚡ Speed Boost bonus (+15% speed). Smaller hitbox makes you harder to hit.</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Tank Ship</strong> (Mid Tier)
+                        <p>Heavy armor! Speed: 90, Health: 250. 🛡️ Damage Resist bonus (takes less damage). Slower but very durable.</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Agile Ship</strong> (Late Tier)
+                        <p>Balanced fighter. Speed: 190, Health: 110. ✨ Evasion bonus (better dodging). Diamond shape with smaller hitbox.</p>
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>⚛️ High-Tier Ships (Einstein's Physics)</h3>
+                    
+                    <div class="item-description">
+                        <strong>Individual Stabilizer</strong> (Level 35+)
+                        <p><strong>Physics:</strong> Quantum mechanics ships rely on wave function probabilities and ensemble statistics, making them inherently unstable at the individual system level. Einstein's Individual Stabilizer completes the description of individual particles by providing definite properties (exact positions, velocities, states) rather than probabilistic distributions. This stabilization bypasses QM's uncertainty principle limitations, allowing precise control impossible in standard quantum mechanics.</p>
+                        <p><strong>Gameplay:</strong> High-speed ship (250 speed) with good health (200). 🔬 Stabilized bonus reduces knockback and improves control. Orange color.</p>
+                        <p><strong>Cost:</strong> 100/80/60/50/40</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Complete Description Vessel</strong> (Level 60+)
+                        <p><strong>Physics:</strong> Standard quantum mechanics vessels operate under ensemble limitations - the Psi-function describes groups, not individual systems. Einstein's Complete Description Vessel provides full individual system descriptions with all definite properties known simultaneously. Unlike QM's statistical approach that cannot complete the description of individual real situations, this vessel operates with complete information, achieving performance beyond quantum mechanical constraints.</p>
+                        <p><strong>Gameplay:</strong> Ultimate ship! Speed: 280, Health: 350. ⚛️ Complete bonus provides damage reduction and improved maneuverability. Purple diamond shape.</p>
+                        <p><strong>Cost:</strong> 180/150/120/100/80</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Shields Tab -->
+            <div id="tutorial-shields" class="tutorial-content">
+                <div class="tutorial-section">
+                    <h3>🛡️ Basic Shields</h3>
+                    
+                    <div class="item-description">
+                        <strong>Basic Shield</strong> (Early Tier)
+                        <p>Capacity: 50. No regeneration - breaks when depleted. Cheap and effective for early game.</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Reinforced Shield</strong> (Mid Tier)
+                        <p>Capacity: 100. No regeneration. Double the protection of basic shield.</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Quantum Shield</strong> (Late Tier)
+                        <p>Capacity: 150. Regenerates 15/s! The only basic shield that recharges. Excellent for sustained combat.</p>
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>⚛️ High-Tier Shields (Einstein's Physics)</h3>
+                    
+                    <div class="item-description">
+                        <strong>Ontological Reality</strong> (Level 40+)
+                        <p><strong>Physics:</strong> In quantum mechanics, the wave function is epistemological (a tool for predictions) not ontological (real). QM shields work with probabilistic protection based on ensemble statistics. Einstein's Ontological Reality Shield makes the wave function ontological - transforming probability distributions into actual, real protective barriers. This sidesteps QM's limitation where the Psi-function only describes ensembles, creating a shield that operates on individual system reality rather than statistical predictions.</p>
+                        <p><strong>Gameplay:</strong> Massive capacity (300) with fast regeneration (30/s). The shield has a pulsing, "real" wave-like visual effect. Can recover during intense combat.</p>
+                        <p><strong>Cost:</strong> 120/100/80/60/50</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Individual System Barrier</strong> (Level 70+)
+                        <p><strong>Physics:</strong> Quantum mechanics barriers rely on ensemble statistics and cannot provide complete protection for individual systems - the Psi-function's limitation. Einstein's Individual System Barrier uses complete descriptions of individual systems with all definite properties known, providing layered protection that bypasses ensemble limitations entirely. Unlike QM's statistical approach that cannot complete the description of individual real situations, this barrier operates with full individual system information, achieving protection impossible in standard quantum mechanics.</p>
+                        <p><strong>Gameplay:</strong> Ultimate defense! Capacity: 500, Regeneration: 50/s. Advanced barrier with individual-system patterns. Can tank massive damage and recover quickly.</p>
+                        <p><strong>Cost:</strong> 200/180/150/120/100</p>
+                    </div>
+                </div>
+                
+                <div class="tutorial-tip">
+                    <strong>💡 Shield Strategy:</strong> Shields regenerate automatically when not taking damage. Quantum-tier and above shields can regenerate even during combat!
+                </div>
+            </div>
+            
+            <!-- Upgrades Tab -->
+            <div id="tutorial-upgrades" class="tutorial-content">
+                <div class="tutorial-section">
+                    <h3>⚙️ Basic Upgrades</h3>
+                    
+                    <div class="item-description">
+                        <strong>Targeting Computer</strong>
+                        <p>Enables targeting crosshair and aim assist. Helps with precision shooting, especially in Ensemble mode.</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Auto Collector</strong>
+                        <p>Automatically attracts all material drops to you from anywhere on screen. No more chasing items!</p>
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>📈 Stat Upgrades (Token-Based RPG System)</h3>
+                    <p>During level-up, you can spend tokens to permanently upgrade your stats. These upgrades persist across all levels and stack with equipment bonuses. Costs increase with each purchase and scale with your level.</p>
+                    
+                    <h4 style="color: #4fc3f7; margin-top: 15px; margin-bottom: 10px;">⚔️ Combat Stats</h4>
+                    
+                    <div class="item-description">
+                        <strong>⚡ Speed</strong>
+                        <p>Increases movement speed by +30 per upgrade. Stacks with ship speed bonuses. Essential for dodging enemy fire and collecting materials quickly.</p>
+                        <p><strong>Cap:</strong> Maximum +300 (450 total speed) - prevents game-breaking speeds</p>
+                        <p><strong>Cost:</strong> Starts at 10 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>🔥 Fire Rate</strong>
+                        <p>Increases shooting speed by +0.2 shots per second per upgrade. Higher fire rate means more damage output. Stacks with weapon fire rates.</p>
+                        <p><strong>Cap:</strong> Maximum +5.0 (5.5 total fire rate) - prevents bullet spam lag</p>
+                        <p><strong>Cost:</strong> Starts at 15 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>💥 Damage</strong>
+                        <p>Increases base damage by +2 per upgrade. This bonus applies to ALL weapons you equip, making it one of the most valuable upgrades. Stacks multiplicatively with weapon damage.</p>
+                        <p><strong>Cap:</strong> Maximum +100 (110 total damage) - prevents one-shotting everything</p>
+                        <p><strong>Cost:</strong> Starts at 20 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>❤️ Max Health</strong>
+                        <p>Increases maximum health by +10 per upgrade. Also increases current health when purchased. More health means more survivability, especially in boss battles.</p>
+                        <p><strong>Cap:</strong> Maximum +500 (600 total health) - prevents unkillable tank builds</p>
+                        <p><strong>Cost:</strong> Starts at 25 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>🎯 Critical Hit Chance</strong>
+                        <p>Increases critical hit chance by +2% per upgrade (caps at 100%). Critical hits deal bonus damage based on your Critical Hit Damage stat. Stacks with Transformation Time Scanner upgrade.</p>
+                        <p><strong>Cap:</strong> Maximum 100% - guaranteed critical hits</p>
+                        <p><strong>Cost:</strong> Starts at 30 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>⚔️ Critical Hit Damage</strong>
+                        <p>Increases critical hit damage multiplier by +5% per upgrade (e.g., 2.0x → 2.05x). Works with Critical Hit Chance to dramatically increase damage output. Higher multiplier means more devastating crits!</p>
+                        <p><strong>Cap:</strong> Maximum 5.0x multiplier - prevents massive crits from breaking game</p>
+                        <p><strong>Cost:</strong> Starts at 35 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <h4 style="color: #4fc3f7; margin-top: 15px; margin-bottom: 10px;">🛡️ Defense Stats</h4>
+                    
+                    <div class="item-description">
+                        <strong>🛡️ Shield Capacity</strong>
+                        <p>Increases shield capacity by +5% per upgrade (caps at 100% bonus). This percentage bonus applies to ALL shields you equip, making high-tier shields even more powerful. Essential for tank builds.</p>
+                        <p><strong>Cost:</strong> Starts at 30 tokens, increases by 5 per upgrade</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>🔋 Shield Regeneration</strong>
+                        <p>Adds +1 shield regeneration per second per upgrade. This flat bonus stacks with shield's base regen rate, allowing even basic shields to regenerate. Works with all shields that have regeneration.</p>
+                        <p><strong>Cap:</strong> Maximum 50/s - prevents invincibility from shield regen</p>
+                        <p><strong>Cost:</strong> Starts at 35 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>🛡️ Damage Reduction</strong>
+                        <p>Reduces incoming damage by +1% per upgrade (caps at 50%). This applies to ALL damage sources - enemy bullets, collisions, and boss attacks. Stacks with ship damage resistance bonuses.</p>
+                        <p><strong>Cap:</strong> Maximum 50% - prevents becoming invincible</p>
+                        <p><strong>Cost:</strong> Starts at 40 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>✨ Evasion</strong>
+                        <p>Increases dodge chance by +1% per upgrade (caps at 30%). When you dodge, you take no damage from that attack. Stacks with ship evasion bonuses. Perfect for agile playstyles.</p>
+                        <p><strong>Cap:</strong> Maximum 30% - prevents guaranteed dodging</p>
+                        <p><strong>Cost:</strong> Starts at 40 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <h4 style="color: #4fc3f7; margin-top: 15px; margin-bottom: 10px;">💰 Economy & Progression</h4>
+                    
+                    <div class="item-description">
+                        <strong>💎 Material Drop Rate</strong>
+                        <p>Increases material drop chance by +5% per upgrade. More materials mean faster crafting and more powerful equipment. Stacks with Ensemble Bypass and Individual System Amplifier upgrades.</p>
+                        <p><strong>Cap:</strong> Maximum 300% (4x materials) - prevents trivial crafting</p>
+                        <p><strong>Cost:</strong> Starts at 25 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>💰 Token Drop Rate</strong>
+                        <p>Increases token drop rate by +5% per upgrade. More tokens mean more stat upgrades! This creates a positive feedback loop - invest in token drops to get more tokens for other upgrades.</p>
+                        <p><strong>Cap:</strong> Maximum 200% (3x tokens) - prevents infinite feedback loop</p>
+                        <p><strong>Cost:</strong> Starts at 30 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>⏱️ Level Time Reduction</strong>
+                        <p>Reduces the time needed per level by +3% per upgrade (max 40%). Each level normally requires 30 seconds of gameplay. With this upgrade, you'll level up faster, getting more opportunities for upgrades and crafting. At maximum (40% reduction), levels take 18 seconds each (minimum 10 seconds guaranteed).</p>
+                        <p><strong>Cost:</strong> Starts at 45 tokens, increases by 7 per upgrade</p>
+                    </div>
+                    
+                    <h4 style="color: #4fc3f7; margin-top: 15px; margin-bottom: 10px;">✨ Quality of Life</h4>
+                    
+                    <div class="item-description">
+                        <strong>🚀 Projectile Speed</strong>
+                        <p>Increases projectile speed by +10% per upgrade. Faster bullets reach targets quicker, making it easier to hit moving enemies and reducing the time between shooting and dealing damage.</p>
+                        <p><strong>Cap:</strong> Maximum +200% (3x speed) - prevents instant hits</p>
+                        <p><strong>Cost:</strong> Starts at 20 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>💚 Health Regeneration</strong>
+                        <p>Adds +0.5 health regeneration per second per upgrade. Passive health regen allows you to recover between fights without using health packs. Stacks additively - multiple upgrades = faster regen!</p>
+                        <p><strong>Cap:</strong> Maximum 10 HP/s - prevents passive healing from being overpowered</p>
+                        <p><strong>Cost:</strong> Starts at 30 tokens, increases by 5 per upgrade (logarithmic scaling at high levels)</p>
+                    </div>
+                    
+                    <h4 style="color: #4fc3f7; margin-top: 15px; margin-bottom: 10px;">💉 Consumables</h4>
+                    
+                    <div class="item-description">
+                        <strong>💉 Health Pack</strong>
+                        <p>Purchasable consumable that restores 50 HP when used (press H key). Can be used anytime during gameplay. Store multiple packs for emergency healing during boss battles or tough encounters.</p>
+                        <p><strong>Cost:</strong> Starts at 20 tokens, increases by 5 per pack</p>
+                    </div>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>⚛️ High-Tier Upgrades (Einstein's Physics - Crafted Items)</h3>
+                    
+                    <div class="item-description">
+                        <strong>Complete Description Matrix</strong> (Level 35+)
+                        <p><strong>Physics:</strong> Statistical quantum theory cannot provide a complete description of individual systems - the Psi-function describes ensembles, not singular systems. Einstein's Complete Description Matrix completes the QM description for individual systems by providing complete information about individual particles (all definite properties known simultaneously). Unlike QM's statistical approach, this upgrade enables weapons to operate with full individual system knowledge, bypassing uncertainty principle limitations.</p>
+                        <p><strong>Effects:</strong> +50% damage to all weapons, +30% fire rate. Significant DPS boost!</p>
+                        <p><strong>Cost:</strong> 150/120/100/80/60</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Transformation Time Scanner</strong> (Level 40+)
+                        <p><strong>Physics:</strong> Quantum mechanics can only predict transformation probabilities for ensembles - the Psi-function cannot show exact transformation times for individual radioactive atoms. Einstein's Transformation Time Scanner uses his radioactive atom model where individual atoms have definite decay times. This technology scans and predicts exact transformation times by providing complete descriptions of individual systems, allowing critical hits based on precise timing impossible in standard QM.</p>
+                        <p><strong>Effects:</strong> +40% critical hit chance. Critical hits deal 2x damage! Special particle effects on crits.</p>
+                        <p><strong>Cost:</strong> 180/150/120/100/80</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Ensemble Bypass</strong> (Level 65+)
+                        <p><strong>Physics:</strong> Bell's theorem constrains quantum mechanics by showing local hidden variables are impossible - but only for correlated pairs (A and B together). Standard QM upgrades work within ensemble limitations. Einstein's Ensemble Bypass sidesteps ensemble limitations entirely by working with individual systems (A or B alone), not pairs. Since Bell's logic requires measurements on both systems to test correlations, this upgrade avoids Bell's theorem constraints, enabling resource collection and movement speed impossible in standard quantum mechanics.</p>
+                        <p><strong>Effects:</strong> +100% resource drops (doubles all materials/credits), +50% movement speed. Excellent for farming!</p>
+                        <p><strong>Cost:</strong> 250/200/180/150/120</p>
+                    </div>
+                    
+                    <div class="item-description">
+                        <strong>Individual System Amplifier</strong> (Level 80+)
+                        <p><strong>Physics:</strong> Quantum mechanics amplifiers work with ensemble statistics and uncertainty - they can only boost probabilistic properties. Einstein's Individual System Amplifier uses the complete individual system model where all definite properties are known. This ultimate upgrade amplifies individual system properties (damage, fire rate, speed, resource collection) by operating on complete descriptions rather than statistical distributions, achieving power amplification impossible in standard QM where the Psi-function cannot complete the description of individual real situations.</p>
+                        <p><strong>Effects:</strong> +75% damage, +75% fire rate, +75% movement speed, +200% resource drops (triples drops!). Massive power spike!</p>
+                        <p><strong>Cost:</strong> 300/250/220/200/150 (highest tier)</p>
+                    </div>
+                </div>
+                
+                <div class="tutorial-tip">
+                    <strong>💡 Stat Upgrade Strategy:</strong> Focus on Damage and Fire Rate early for maximum DPS. Defense stats (Shield Capacity, Damage Reduction, Evasion) become crucial in later levels. Economy upgrades (Material/Token Drop Rate) create positive feedback loops - invest early for long-term gains!
+                </div>
+                
+                <div class="tutorial-highlight" style="margin-top: 15px;">
+                    <strong>⚖️ Balance Note:</strong> All stats have maximum caps to prevent game-breaking builds. Upgrade costs use logarithmic scaling at high levels to keep progression balanced. When a stat is maxed, you'll see "(MAXED)" and tokens will be refunded if you try to upgrade further.
+                </div>
+                
+                <div class="tutorial-tip">
+                    <strong>💡 Crafted Upgrade Strategy:</strong> Crafted upgrades stack with stat upgrades! You can equip multiple crafted upgrades for cumulative effects. The Individual System Amplifier combined with Ensemble Bypass gives 5x resource drops total!
+                </div>
+            </div>
+            
+            <!-- Bosses Tab -->
+            <div id="tutorial-bosses" class="tutorial-content">
+                <div class="tutorial-section">
+                    <h3>👾 Boss Battles</h3>
+                    <p>Bosses appear every 15 levels (Level 15, 30, 45, 60, 75+). Each boss has unique puzzle mechanics that you must solve to defeat them!</p>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🧠 Boss 1: Neurotransmitter (Level 15)</h3>
+                    <p><strong>Visual:</strong> Purple neuron core with 4 red vesicles orbiting around it.</p>
+                    <p><strong>Puzzle:</strong> Destroy the 4 red vesicles FIRST, then the neuron core becomes vulnerable.</p>
+                    <p><strong>Strategy:</strong> Focus on the orbiting vesicles. They regenerate if you don't destroy them quickly enough. Once all vesicles are gone, the core can be damaged.</p>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🧬 Boss 2: DNA Helix (Level 30)</h3>
+                    <p><strong>Visual:</strong> Two twisted helix strands (green and cyan) with a purple core in the center.</p>
+                    <p><strong>Puzzle:</strong> Destroy strand 1 (green) first, then strand 2 (cyan), then the core becomes vulnerable.</p>
+                    <p><strong>Strategy:</strong> Focus on the green strand first. Once it's destroyed, the cyan strand becomes vulnerable. After both strands are destroyed in order, attack the core!</p>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🔬 Boss 3: Protein Complex (Level 45)</h3>
+                    <p><strong>Visual:</strong> Purple core with 4 colored subunits orbiting (red, orange, light orange, gold).</p>
+                    <p><strong>Puzzle:</strong> Destroy subunits in ORDER: 1 (dot), 2 (line), 3 (triangle), 4 (square), then the core.</p>
+                    <p><strong>Strategy:</strong> Watch for the visual indicators on each subunit. Only the current target can take damage - others will bounce your shots!</p>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🦠 Boss 4: Cell Membrane (Level 60)</h3>
+                    <p><strong>Visual:</strong> Three concentric layers - outer orange membrane, inner orange membrane, and purple nucleus.</p>
+                    <p><strong>Puzzle:</strong> Destroy outer membrane first, then inner membrane, then nucleus.</p>
+                    <p><strong>Strategy:</strong> Work from outside in. Each layer must be completely destroyed before the next becomes vulnerable.</p>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>⚛️ Advanced Bosses (Level 75+)</h3>
+                    <p><strong>Visual:</strong> Complex quantum entanglement network with pulsing nodes and connections.</p>
+                    <p><strong>Puzzle:</strong> No special puzzle - just massive health and damage. Pure endurance battle!</p>
+                    <p><strong>Strategy:</strong> Use your best equipment and upgrades. These bosses are tests of your late-game power!</p>
+                </div>
+                
+                <div class="tutorial-highlight">
+                    <strong>⚠️ Boss Mode:</strong> During boss battles, all three game modes are combined. You'll see particles, pairs, and red molecules all at once!
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>⚔️ Boss Collision Mechanics</h3>
+                    <p><strong>Important:</strong> Touching a boss deals significant damage but won't kill you instantly. Your ship will flash red/orange when in contact with a boss as a warning indicator.</p>
+                    <ul>
+                        <li><strong>Damage Cooldown:</strong> Bosses can only damage you once every 1.5 seconds, giving you time to escape</li>
+                        <li><strong>Visual Warning:</strong> When touching a boss, your ship glows red/orange with a pulsing border - get away quickly!</li>
+                        <li><strong>High Damage:</strong> Boss collisions deal 2.5x their normal damage - dangerous but survivable if you react quickly</li>
+                    </ul>
+                    <p><strong>Strategy:</strong> Keep your distance! Use your weapons to damage bosses from afar. If you see the red warning effect, move away immediately to avoid taking continuous damage.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Leaderboard UI -->
+        <div id="leaderboardUI">
+            <h2 style="color: #4fc3f7; margin-bottom: 20px;">Leaderboard</h2>
+            <p style="color: #aaa; margin-bottom: 20px;">Press ESC or L to close</p>
+            
+            <div style="margin-bottom: 20px;">
+                <label style="color: #4fc3f7; display: block; margin-bottom: 10px; font-weight: bold;">Your Name:</label>
+                <input type="text" id="playerNameInput" placeholder="Enter your name" maxlength="20">
+                <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">Your scores will be saved with this name</p>
+            </div>
+            
+            <div class="shop-section">
+                <h3>Top Scores</h3>
+                <div id="leaderboardList"></div>
+            </div>
+        </div>
+        
+        <!-- Settings UI -->
+        <div id="settingsUI">
+            <h2 style="color: #4fc3f7; margin-bottom: 20px;">Settings</h2>
+            <p style="color: #aaa; margin-bottom: 20px;">Press ESC to close</p>
+            
+            <div class="shop-section">
+                <h3>Audio Settings</h3>
+                
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                        Master Volume: <span id="masterVolumeValue">70</span>%
+                    </label>
+                    <input type="range" id="masterVolumeSlider" min="0" max="100" value="70" step="5" 
+                           style="width: 100%; margin-bottom: 10px;"
+                           oninput="game.audio.setVolume('master', this.value / 100); document.getElementById('masterVolumeValue').textContent = this.value;">
+                </div>
+                
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                        Music Volume: <span id="musicVolumeValue">60</span>%
+                    </label>
+                    <input type="range" id="musicVolumeSlider" min="0" max="100" value="60" step="5" 
+                           style="width: 100%; margin-bottom: 10px;"
+                           oninput="game.audio.setVolume('music', this.value / 100); document.getElementById('musicVolumeValue').textContent = this.value;">
+                </div>
+                
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                        Sound Effects Volume: <span id="sfxVolumeValue">80</span>%
+                    </label>
+                    <input type="range" id="sfxVolumeSlider" min="0" max="100" value="80" step="5" 
+                           style="width: 100%; margin-bottom: 10px;"
+                           oninput="game.audio.setVolume('sfx', this.value / 100); document.getElementById('sfxVolumeValue').textContent = this.value;">
+                </div>
+                
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                        Voice Volume: <span id="voiceVolumeValue">70</span>%
+                    </label>
+                    <input type="range" id="voiceVolumeSlider" min="0" max="100" value="70" step="5" 
+                           style="width: 100%; margin-bottom: 10px;"
+                           oninput="game.audio.setVolume('voice', this.value / 100); document.getElementById('voiceVolumeValue').textContent = this.value;">
+                </div>
+            </div>
+            
+            <div class="shop-section">
+                <h3>Gamepad Controls</h3>
+                
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                        Cursor Sensitivity: <span id="sensitivityValue">600</span>
+                    </label>
+                    <input type="range" id="sensitivitySlider" min="100" max="2000" value="600" step="50" 
+                           style="width: 100%; margin-bottom: 10px;"
+                           oninput="game.updateSetting('gamepadSensitivity', parseInt(this.value)); document.getElementById('sensitivityValue').textContent = this.value;">
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Adjust how fast the cursor moves with the right joystick (100 = slow, 2000 = very fast)
+                    </p>
+                </div>
+            </div>
+            
+            <div class="shop-section">
+                <h3>Display</h3>
+                
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="fullscreenToggle" 
+                               onchange="game.toggleFullscreen();"
+                               style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                        Fullscreen Mode
+                    </label>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px; margin-left: 30px;">
+                        Toggle fullscreen mode for immersive gameplay (Press F11 to toggle - ESC will not exit fullscreen)
+                    </p>
+                </div>
+            </div>
+            
+            <div class="shop-section">
+                <h3>Visual Effects</h3>
+                
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="particlesToggle" checked 
+                               onchange="game.updateSetting('showParticles', this.checked);"
+                               style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                        Show Particle Effects
+                    </label>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px; margin-left: 30px;">
+                        Enable visual particle effects for explosions and impacts
+                    </p>
+                </div>
+                
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="explosionsToggle" checked 
+                               onchange="game.updateSetting('showExplosions', this.checked);"
+                               style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                        Show Explosion Effects
+                    </label>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px; margin-left: 30px;">
+                        Enable explosion visual effects when enemies are destroyed
+                    </p>
+                </div>
+                
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="screenShakeToggle" checked 
+                               onchange="game.updateSetting('screenShake', this.checked);"
+                               style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                        Screen Shake
+                    </label>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px; margin-left: 30px;">
+                        Enable screen shake effects on impacts (may improve performance if disabled)
+                    </p>
+                </div>
+            </div>
+            
+            <div style="margin-top: 30px; text-align: center;">
+                <button onclick="game.toggleSettings();" style="background: #4fc3f7; color: #000; border: none; padding: 12px 24px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold;">
+                    Close Settings
+                </button>
+            </div>
+        </div>
+        
+        <!-- Weapon Wheel UI -->
+        <div id="weaponWheelUI">
+            <div class="weapon-wheel-container" id="weaponWheelContainer">
+                <div class="weapon-wheel-center">WEAPONS</div>
+            </div>
+        </div>
+        
+        <!-- Repair Selection UI -->
+        <div id="repairSelectionUI">
+            <h3>Select Item to Repair (Q + Mouse Wheel)</h3>
+            <div id="repairSelectionList"></div>
+        </div>
+    </div>
+
+    <!-- Explicitly set DEV_MODE to false for regular mode -->
+    <script>
+        window.DEV_MODE = false;
+    </script>
+    <script src="config.js"></script>
+    <script src="game.js"></script>
+    <script src="jszip.min.js"></script>
+    <script src="download.js"></script>
+    <script>
+        if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js').catch(err => {
+                    console.warn('Service worker registration failed:', err);
+                });
+            });
+        }
+    </script>
+</body>
+</html>

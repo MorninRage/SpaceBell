@@ -3188,6 +3188,8 @@ class SpaceShooterGame {
                     const nowStart = Date.now();
                     const duration = this.puzzleState.pendingDuration || 12000;
                     this.puzzleState.totalEnd = nowStart + duration;
+                    // Reset reveal so the live step sets a fresh reveal window
+                    this.puzzleState.revealEnd = 0;
                     this.setActivePuzzleTarget();
                 } else {
                     this.setPreviewPuzzleTarget(this.puzzleState.previewIndex);
@@ -3319,6 +3321,7 @@ class SpaceShooterGame {
         });
         if (!found) {
             // If the expected target vanished, restart the sequence
+            this.puzzleState.revealEnd = 0;
             this.startPuzzleSequence();
             return;
         }

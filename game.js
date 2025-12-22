@@ -6751,12 +6751,6 @@ class SpaceShooterGame {
                 const angle = Math.atan2(dy, dx);
                 pair.b.x = pair.a.x + Math.cos(angle) * 200;
                 pair.b.y = pair.a.y + Math.sin(angle) * 200;
-                // Blend a modest inward pull without killing existing motion
-                const pull = 20;
-                pair.a.vx = pair.a.vx * 0.9 + Math.cos(angle + Math.PI) * pull * 0.3;
-                pair.a.vy = pair.a.vy * 0.9 + Math.sin(angle + Math.PI) * pull * 0.3;
-                pair.b.vx = pair.b.vx * 0.9 + Math.cos(angle) * pull;
-                pair.b.vy = pair.b.vy * 0.9 + Math.sin(angle) * pull;
             }
             
             [pair.a, pair.b].forEach(p => {

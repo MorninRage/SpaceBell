@@ -2972,11 +2972,18 @@ class SpaceShooterGame {
         // Create a partner particle for the pair; partner proxies the puzzleId but isn't itself the puzzle target
         const angle = Math.random() * Math.PI * 2;
         const distance = 80;
+        const margin = 60;
+        const clampPos = (val, min, max) => Math.min(Math.max(val, min), max);
         let partner = null;
         for (let i = 0; i < 6; i++) {
             const a = angle + i * (Math.PI / 3); // try multiple angles if HUD overlap
-            const px = puzzleTarget.x + Math.cos(a) * distance;
-            const py = puzzleTarget.y + Math.sin(a) * distance;
+            let px = puzzleTarget.x + Math.cos(a) * distance;
+            let py = puzzleTarget.y + Math.sin(a) * distance;
+            // Avoid spawning too close to walls to reduce bounce + snap jitter
+            const w = this.canvas?.width || 0;
+            const h = this.canvas?.height || 0;
+            px = clampPos(px, margin, Math.max(margin, w - margin));
+            py = clampPos(py, margin, Math.max(margin, h - margin));
             if (!this.isInHudOrUI(px, py, 18)) {
                 partner = {
                     x: px,
@@ -6751,6 +6758,18 @@ class SpaceShooterGame {
                 const angle = Math.atan2(dy, dx);
                 pair.b.x = pair.a.x + Math.cos(angle) * 200;
                 pair.b.y = pair.a.y + Math.sin(angle) * 200;
+                // Radial damping on correction: reduce outward component, keep tangential
+                if (distance > 0.0001) {
+                    const nx = dx / distance;
+                    const ny = dy / distance;
+                    const damp = 0.5;
+                    const dotA = pair.a.vx * nx + pair.a.vy * ny;
+                    const dotB = pair.b.vx * nx + pair.b.vy * ny;
+                    pair.a.vx -= dotA * nx * damp;
+                    pair.a.vy -= dotA * ny * damp;
+                    pair.b.vx -= dotB * nx * damp;
+                    pair.b.vy -= dotB * ny * damp;
+                }
             }
             
             [pair.a, pair.b].forEach(p => {

@@ -3182,6 +3182,8 @@ class SpaceShooterGame {
                     this.puzzleState.previewing = false;
                     this.puzzleState.previewDone = true;
                     this.puzzleState.progress = 0;
+                    // Turn off all preview highlights before starting live step
+                    this.targets.forEach(t => t.puzzleActive = false);
                     // Start the real puzzle timer now
                     const nowStart = Date.now();
                     const duration = this.puzzleState.pendingDuration || 12000;

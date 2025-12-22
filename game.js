@@ -18750,9 +18750,10 @@ class SpaceShooterGame {
 
         const margin = Math.max(this.canvas?.width || 0, this.canvas?.height || 0) * 0.05 + 40;
         this.pairs.forEach((pair, pairIndex) => {
-                const aIsPuzzle = activePuzzleId && (pair.a?.puzzleId === activePuzzleId || pair.a?.puzzleProxyId === activePuzzleId);
-                const bIsPuzzle = activePuzzleId && (pair.b?.puzzleId === activePuzzleId || pair.b?.puzzleProxyId === activePuzzleId);
+            const aIsPuzzle = activePuzzleId && (pair.a?.puzzleId === activePuzzleId || pair.a?.puzzleProxyId === activePuzzleId);
+            const bIsPuzzle = activePuzzleId && (pair.b?.puzzleId === activePuzzleId || pair.b?.puzzleProxyId === activePuzzleId);
             const isPuzzlePair = aIsPuzzle || bIsPuzzle;
+            const puzzleGlow = isPuzzlePair && revealActive;
 
             // Offscreen cull: skip non-puzzle pairs fully offscreen
             const inView = (p) => p && p.x >= -margin && p.x <= (this.canvas?.width || 0) + margin &&
@@ -18767,18 +18768,18 @@ class SpaceShooterGame {
             
             // Enhanced Bell pair connection - quantum entanglement bond
             const bondPulse = 0.5 + Math.sin(time * 1.5 + pairIndex) * 0.3;
-            const puzzlePulse = isPuzzlePair ? (0.8 + Math.sin(time * 3 + pairIndex) * 0.2) : 0;
+            const puzzlePulse = puzzleGlow ? (0.8 + Math.sin(time * 3 + pairIndex) * 0.2) : 0;
             
             // Main entanglement bond with gradient (heavy glow only for active pair)
             const bondGradient = this.ctx.createLinearGradient(pair.a.x, pair.a.y, pair.b.x, pair.b.y);
-            bondGradient.addColorStop(0, isPuzzlePair ? `rgba(255, 230, 180, ${0.6 + 0.3 * puzzlePulse})` : `rgba(79, 195, 247, ${0.6 * bondPulse})`);
-            bondGradient.addColorStop(0.5, isPuzzlePair ? `rgba(255, 200, 140, ${0.8 + 0.3 * puzzlePulse})` : `rgba(129, 212, 250, ${0.8 * bondPulse})`);
-            bondGradient.addColorStop(1, isPuzzlePair ? `rgba(255, 230, 180, ${0.6 + 0.3 * puzzlePulse})` : `rgba(79, 195, 247, ${0.6 * bondPulse})`);
+            bondGradient.addColorStop(0, puzzleGlow ? `rgba(255, 230, 180, ${0.6 + 0.3 * puzzlePulse})` : `rgba(79, 195, 247, ${0.6 * bondPulse})`);
+            bondGradient.addColorStop(0.5, puzzleGlow ? `rgba(255, 200, 140, ${0.8 + 0.3 * puzzlePulse})` : `rgba(129, 212, 250, ${0.8 * bondPulse})`);
+            bondGradient.addColorStop(1, puzzleGlow ? `rgba(255, 230, 180, ${0.6 + 0.3 * puzzlePulse})` : `rgba(79, 195, 247, ${0.6 * bondPulse})`);
             
             this.ctx.strokeStyle = bondGradient;
-            this.ctx.lineWidth = isPuzzlePair ? 4 : 2;
-            this.ctx.shadowBlur = (isPuzzlePair && drawHeavy) ? 16 : 0; // no shadow on non-active pairs
-            this.ctx.shadowColor = isPuzzlePair ? 'rgba(255, 230, 180, 0.6)' : 'rgba(0,0,0,0)';
+            this.ctx.lineWidth = puzzleGlow ? 4 : 2;
+            this.ctx.shadowBlur = (puzzleGlow && drawHeavy) ? 16 : 0; // no shadow on non-active pairs
+            this.ctx.shadowColor = puzzleGlow ? 'rgba(255, 230, 180, 0.6)' : 'rgba(0,0,0,0)';
             this.ctx.beginPath();
             this.ctx.moveTo(pair.a.x, pair.a.y);
             this.ctx.lineTo(pair.b.x, pair.b.y);
@@ -18810,9 +18811,10 @@ class SpaceShooterGame {
                 const particleSize = p.size || 15;
                 const particlePulse = 0.8 + Math.sin(time + pairIndex + particleIndex) * 0.2;
                 const isPuzzleNode = (p.puzzleId === activePuzzleId) || (p.puzzleProxyId === activePuzzleId);
+                const showPuzzle = isPuzzleNode && revealActive;
                 
                 // Enhanced particle gradient
-                if (isPuzzleNode) {
+                if (showPuzzle) {
                     const particleGradient = this.ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, particleSize);
                     particleGradient.addColorStop(0, '#fff4d8');
                     particleGradient.addColorStop(0.3, '#ffd18f');
@@ -18832,8 +18834,8 @@ class SpaceShooterGame {
                 this.ctx.fill();
                 
                 // Enhanced glow
-                this.ctx.shadowBlur = isPuzzleNode && drawHeavy ? Math.min(14, particleSize * 1.8) : 0;
-                this.ctx.shadowColor = isPuzzleNode ? 'rgba(255, 230, 180, 0.6)' : 'rgba(0,0,0,0)';
+                this.ctx.shadowBlur = showPuzzle && drawHeavy ? Math.min(14, particleSize * 1.8) : 0;
+                this.ctx.shadowColor = showPuzzle ? 'rgba(255, 230, 180, 0.6)' : 'rgba(0,0,0,0)';
                 this.ctx.fill();
                 this.ctx.shadowBlur = 0;
                 

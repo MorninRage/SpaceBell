@@ -729,6 +729,7 @@ class SpaceShooterGame {
         this._retroGridDirty = true; // mark grid cache dirty on init
         this.onResizeCallbacks = this.onResizeCallbacks || [];
         this.onResizeCallbacks.push(() => { this._retroGridDirty = true; });
+        this.pendingCutscene = null; // holds next cutscene to start after pause/menu
         
         // Hidden sequence tracking for save feature unlock
         // Sequence: Bell mode for 5 levels (1-5), Ensemble mode for 3 levels (6-8), Individual mode for 2 levels (9-10)
@@ -750,7 +751,8 @@ class SpaceShooterGame {
         // Cutscene state
         this.cutsceneTime = 0;
         this.cutscenePhase = 0; // Phase within current cutscene
-        this.cutsceneId = 'opening'; // ID of current cutscene ('opening', 'level5', 'level10', etc.)
+        this.cutsceneId = 'intro'; // Intro plays first, then opening
+        this.awaitingOpeningCutscene = false; // After intro, wait for ESC to start the opening cutscene
         this.cutscenesShown = JSON.parse(localStorage.getItem('cutscenesShown') || '[]'); // Track which cutscenes have been shown
         this.cutsceneIsManual = false; // Track if cutscene was triggered manually (dev mode) vs automatically (level progression)
         // OPTIMIZATION: Use cached DOM element
@@ -1211,7 +1213,7 @@ class SpaceShooterGame {
             this.cutsceneId = null; // Clear cutscene ID to prevent drawing
             // Start main music when game begins
             this.audio.playMusic('main', true, true);
-            this.showNameInputDelayed();
+            // Name prompt disabled
         } else if (this.showCutscene && this.gameState === 'cutscene') {
             this.startCutscene();
         } else {
@@ -1220,7 +1222,7 @@ class SpaceShooterGame {
             this.cutsceneId = null; // Clear cutscene ID to prevent drawing
             // Start main music when game begins
             this.audio.playMusic('main', true, true);
-            this.showNameInputDelayed();
+            // Name prompt disabled
         }
         
         this.gameLoop();
@@ -1413,6 +1415,25 @@ class SpaceShooterGame {
                 e.preventDefault(); // Prevent browser's default F11 behavior
                 this.toggleFullscreen();
             } else if (e.key === 'Escape') {
+                // If waiting to launch the opening cutscene after intro, ESC starts it
+                if (this.awaitingOpeningCutscene) {
+                    e.preventDefault();
+                    const settingsUI = this._cachedElements.settingsUI;
+                if (settingsUI) {
+                        settingsUI.classList.remove('active');
+                    }
+                    // Ensure we unpause before starting the next cutscene
+                    this.isPaused = false;
+                this.clearPauseUI();
+                    this.awaitingOpeningCutscene = false;
+                    this.cutsceneId = 'opening';
+                    this.cutscenePhase = 0;
+                    this.cutsceneTime = 0;
+                    this.gameState = 'cutscene';
+                    this.startCutscene();
+                    return;
+                }
+                
                 // In dev mode, allow ESC to work normally
                 if (this.devMode) {
                     // Don't prevent ESC in dev mode - let it work normally
@@ -5183,9 +5204,7 @@ class SpaceShooterGame {
             this.gameState = 'paused';
         } else {
             // Hide all panels (except settings - it's independent)
-            if (ui) ui.classList.remove('paused');
-            if (theoryPanel) theoryPanel.classList.remove('paused');
-            if (instructions) instructions.classList.remove('paused');
+            this.clearPauseUI();
             // Close store when unpausing if it was opened from pause
             if (this._shopFromPause) {
                 this.showShopUI(false);
@@ -5205,6 +5224,17 @@ class SpaceShooterGame {
             // CRITICAL: Ensure game state returns to playing on unpause
             this.gameState = 'playing';
         }
+    }
+    
+    // Ensure pause UI is cleared (used when resuming or after cutscenes)
+    clearPauseUI() {
+        const ui = this._cachedElements.ui;
+        const theoryPanel = this._cachedElements.theoryPanel;
+        const instructions = this._cachedElements.instructions;
+        if (ui) ui.classList.remove('paused');
+        if (theoryPanel) theoryPanel.classList.remove('paused');
+        if (instructions) instructions.classList.remove('paused');
+        this.isPaused = false;
     }
 
     togglePauseStore() {
@@ -5238,6 +5268,15 @@ class SpaceShooterGame {
             ui.classList.remove('active');
         } else {
             // Open settings
+            ui.classList.add('active');
+            this.updateSettingsUI();
+        }
+    }
+    
+    // Show settings specifically after intro, without toggling other states
+    showSettingsMenuForIntro() {
+        const ui = this._cachedElements.settingsUI;
+        if (ui) {
             ui.classList.add('active');
             this.updateSettingsUI();
         }
@@ -25571,6 +25610,18 @@ class SpaceShooterGame {
         this.cutscenePhase = 0;
         this.cutsceneTime = 0;
         
+        // After intro: pause, show settings, wait for ESC to start the opening cutscene
+        if (!wasManual && currentCutsceneId === 'intro') {
+            this.awaitingOpeningCutscene = true;
+            // Enter a full pause state with all pause panels visible (same as ESC)
+            this.isPaused = false; // will be set to true by togglePause
+            this.gameState = 'paused';
+            this.levelUpState = false;
+            this.togglePause(); // shows UI/theory/instructions panels in paused state
+            this.showSettingsMenuForIntro(); // also open settings so player can adjust
+            return;
+        }
+        
         // If this was a level cutscene triggered automatically, proceed to level-up menu
         if (!wasManual && currentCutsceneId && currentCutsceneId.startsWith('level')) {
             this.gameState = 'levelup';
@@ -25585,8 +25636,10 @@ class SpaceShooterGame {
             }
         } else {
             // Manual cutscene or opening cutscene - return to game
+            this.clearPauseUI();
             this.gameState = 'playing';
             this.levelUpState = false;
+            this.awaitingOpeningCutscene = false;
             // Start main music if not already playing
             if (!wasManual) {
                 console.log('[Game] Cutscene ended, starting main music');
@@ -25596,18 +25649,7 @@ class SpaceShooterGame {
         }
     }
     
-    showNameInputDelayed() {
-        // Show name input on first play if no name set
-        if (!this.playerName) {
-            setTimeout(() => {
-                const name = prompt('Enter your name for the leaderboard (you can change this later):', 'Player');
-                if (name && name.trim()) {
-                    this.playerName = name.trim();
-                    this.savePlayerName();
-                }
-            }, 1000);
-        }
-    }
+    // Name input prompt disabled (was showNameInputDelayed)
     
     updateCutscene(deltaTime) {
         if (this.gameState !== 'cutscene') {
@@ -25618,7 +25660,21 @@ class SpaceShooterGame {
         this.cutsceneTime += deltaTime;
         
         // Handle different cutscenes based on ID
-        if (this.cutsceneId === 'opening') {
+        if (this.cutsceneId === 'intro') {
+            // Intro pacing: ~32s total across 4 phases
+            if (this.cutscenePhase === 0 && this.cutsceneTime > 8) {
+                this.cutscenePhase = 1;
+                this.cutsceneTime = 0;
+            } else if (this.cutscenePhase === 1 && this.cutsceneTime > 8) {
+                this.cutscenePhase = 2;
+                this.cutsceneTime = 0;
+            } else if (this.cutscenePhase === 2 && this.cutsceneTime > 10) {
+                this.cutscenePhase = 3;
+                this.cutsceneTime = 0;
+            } else if (this.cutscenePhase === 3 && this.cutsceneTime > 6) {
+                this.endCutscene();
+            }
+        } else if (this.cutsceneId === 'opening') {
             // Opening cutscene - optimized timing based on reading speed research
             // Research: Average reading speed 200-250 WPM = 4-5 words/second
             // Allow 4-5 words/second + 2 seconds for image viewing + 1 second fade = optimal timing
@@ -26897,12 +26953,19 @@ class SpaceShooterGame {
             ctx = this.cutsceneCtx;
         }
         
-        // Clear canvas with black background
+        // Reset and clear canvas with black background
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.filter = 'none';
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, w, h);
         
         // Route to appropriate cutscene based on ID
-        if (this.cutsceneId === 'opening') {
+        if (this.cutsceneId === 'intro') {
+            this.drawIntroCutscene(ctx, w, h);
+        } else if (this.cutsceneId === 'opening') {
             this.drawOpeningCutscene(ctx, w, h);
         } else if (this.cutsceneId && this.cutsceneId.startsWith('level')) {
             this.drawLevelCutscene(ctx, w, h);
@@ -26913,6 +26976,180 @@ class SpaceShooterGame {
             ctx.textAlign = 'center';
             ctx.fillText(`Cutscene: ${this.cutsceneId || 'unknown'}`, w * 0.5, h * 0.5);
         }
+        
+        // Restore state
+        ctx.restore();
+    }
+    
+    // Intro cutscene: fast overview before the opening story
+    drawIntroCutscene(ctx, w, h) {
+        // Reset transform/blending to avoid inherited alpha flicker (fullscreen safety)
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        // background stars (stable alpha to prevent fullscreen flicker)
+        ctx.save();
+        ctx.fillStyle = '#000';
+        ctx.globalAlpha = 1;
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = 'rgba(79,195,247,0.6)'; // slightly dimmer base
+        ctx.globalAlpha = 0.9; // fixed alpha
+        for (let i = 0; i < 160; i++) {
+            const x = (i * 89 + Math.sin(this.cutsceneTime * 0.6 + i) * 50) % w;
+            const y = (i * 57 + Math.cos(this.cutsceneTime * 0.7 + i) * 40) % h;
+            const s = 1 + (i % 3) * 0.6;
+            ctx.fillRect(x, y, s, s);
+        }
+        ctx.globalAlpha = 1;
+        ctx.restore();
+        
+        // vignette
+        const vignette = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.65);
+        vignette.addColorStop(0, 'rgba(0,0,0,0)');
+        vignette.addColorStop(1, 'rgba(0,0,0,0.65)');
+        ctx.fillStyle = vignette;
+        ctx.fillRect(0, 0, w, h);
+        
+        // positions
+        const einsteinX = w * 0.28;
+        const einsteinY = h * 0.6;
+        const shipX = w * 0.74;
+        const shipY = h * 0.64;
+        
+        const drawBubble = (text, x, y, width) => {
+            ctx.save();
+            ctx.globalAlpha = 1; // Prevent inherited alpha from dimming text
+            ctx.fillStyle = 'rgba(0,0,0,0.65)';
+            ctx.strokeStyle = '#4fc3f7';
+            ctx.lineWidth = 3;
+            ctx.font = '24px "Segoe UI", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            const lines = text.split('\n');
+            const lineHeight = 28;
+            const padding = 32;
+            const height = lines.length * lineHeight + padding;
+            const top = y - height * 0.5;
+            
+            ctx.beginPath();
+            ctx.roundRect(x - width * 0.5, top, width, height, 14);
+            ctx.fill();
+            ctx.stroke();
+            
+            // Set text color and draw
+            ctx.fillStyle = '#e0f7ff';
+            const startY = y - ((lines.length - 1) * lineHeight) * 0.5;
+            lines.forEach((line, i) => ctx.fillText(line, x, startY + i * lineHeight));
+            ctx.restore();
+        };
+        
+        // characters
+        const einsteinAlpha = 0.8 + Math.sin(this.cutsceneTime * 0.8) * 0.1;
+        this.drawEinsteinCharacter(ctx, einsteinX, einsteinY, 1.05, einsteinAlpha, this.cutsceneTime);
+        ctx.save();
+        ctx.translate(shipX, shipY);
+        ctx.scale(1.15, 1.15);
+        this.drawEinsteinShip(ctx, 0, 0, 1, 0.9, this.cutsceneTime);
+        ctx.restore();
+        
+        // phase text
+        if (this.cutscenePhase === 0) {
+            drawBubble('Welcome, pilot! We prepped your ship for the Bell mission.\nThis intro covers your meters, systems, and settings.', w * 0.5, h * 0.22, Math.min(840, w * 0.88));
+        } else if (this.cutscenePhase === 1) {
+            drawBubble('Core meters:\n- Health & Shield: repairs/shields keep you alive\n- Hunger: drains over time—eat meals/energy to avoid death\n- Speed & Fire Rate: improve via upgrades and gear', w * 0.5, h * 0.24, Math.min(960, w * 0.9));
+        } else if (this.cutscenePhase === 2) {
+            drawBubble('Systems & crafting:\n- Materials drop each level; craft ships, weapons, upgrades\n- Repair decay: gear loses durability—repair or replace\n- Food system: cook meals to restore hunger/methane boosts\n- RPG stats: crit, damage, regen, drop rates from upgrades', w * 0.5, h * 0.26, Math.min(1000, w * 0.92));
+        } else if (this.cutscenePhase === 3) {
+            drawBubble('Adjust graphics and controls in Settings if needed.\nPress ESC to begin the Bell story cutscene and start the mission.', w * 0.5, h * 0.26, Math.min(820, w * 0.85));
+        }
+        ctx.restore(); // restore initial state for stability
+    }
+    
+    // Intro cutscene: quick overview before the main story
+    drawIntroCutscene(ctx, w, h) {
+        // Reset transform/blending to avoid inherited alpha flicker (fullscreen safety)
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        // Starfield (stable alpha to prevent fullscreen flicker)
+        ctx.save();
+        ctx.fillStyle = '#000';
+        ctx.globalAlpha = 1;
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = 'rgba(79,195,247,0.6)'; // slightly dimmer base
+        ctx.globalAlpha = 0.9; // fixed alpha
+        for (let i = 0; i < 160; i++) {
+            const x = (i * 89 + Math.sin(this.cutsceneTime * 0.6 + i) * 50) % w;
+            const y = (i * 57 + Math.cos(this.cutsceneTime * 0.7 + i) * 40) % h;
+            const s = 1 + (i % 3) * 0.6;
+            ctx.fillRect(x, y, s, s);
+        }
+        ctx.globalAlpha = 1;
+        ctx.restore();
+        
+        // Vignette
+        const vig = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.65);
+        vig.addColorStop(0, 'rgba(0,0,0,0)');
+        vig.addColorStop(1, 'rgba(0,0,0,0.65)');
+        ctx.fillStyle = vig;
+        ctx.fillRect(0, 0, w, h);
+        
+        // Positions
+        const einsteinX = w * 0.28;
+        const einsteinY = h * 0.6;
+        const shipX = w * 0.74;
+        const shipY = h * 0.64;
+        
+        const drawBubble = (text, x, y, width) => {
+            ctx.save();
+            ctx.fillStyle = 'rgba(0,0,0,0.65)';
+            ctx.strokeStyle = '#4fc3f7';
+            ctx.lineWidth = 3;
+            ctx.font = '24px "Segoe UI", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            const lines = text.split('\n');
+            const lineHeight = 28;
+            const padding = 32;
+            const height = lines.length * lineHeight + padding;
+            const top = y - height * 0.5;
+            
+            ctx.beginPath();
+            ctx.roundRect(x - width * 0.5, top, width, height, 14);
+            ctx.fill();
+            ctx.stroke();
+            
+            // Set text color and draw
+            ctx.fillStyle = '#e0f7ff';
+            const startY = y - ((lines.length - 1) * lineHeight) * 0.5;
+            lines.forEach((line, i) => ctx.fillText(line, x, startY + i * lineHeight));
+            ctx.restore();
+        };
+        
+        // Characters
+        const einsteinAlpha = 0.8 + Math.sin(this.cutsceneTime * 0.8) * 0.1;
+        this.drawEinsteinCharacter(ctx, einsteinX, einsteinY, 1.05, einsteinAlpha, this.cutsceneTime);
+        ctx.save();
+        ctx.translate(shipX, shipY);
+        ctx.scale(1.15, 1.15);
+        this.drawEinsteinShip(ctx, 0, 0, 1, 0.9, this.cutsceneTime);
+        ctx.restore();
+        
+        // Phase text
+        if (this.cutscenePhase === 0) {
+            drawBubble('Welcome, pilot! We prepped your ship for the Bell mission.\nThis intro covers your meters, systems, and settings.', w * 0.5, h * 0.22, Math.min(840, w * 0.88));
+        } else if (this.cutscenePhase === 1) {
+            drawBubble('Core meters:\n- Health & Shield: repairs/shields keep you alive\n- Hunger: drains over time—eat meals/energy to avoid death\n- Speed & Fire Rate: improve via upgrades and gear', w * 0.5, h * 0.24, Math.min(960, w * 0.9));
+        } else if (this.cutscenePhase === 2) {
+            drawBubble('Systems & crafting:\n- Materials drop each level; craft ships, weapons, upgrades\n- Repair decay: gear loses durability—repair or replace\n- Food system: cook meals to restore hunger/methane boosts\n- RPG stats: crit, damage, regen, drop rates from upgrades', w * 0.5, h * 0.26, Math.min(1000, w * 0.92));
+        } else if (this.cutscenePhase === 3) {
+            drawBubble('Adjust graphics and controls in Settings if needed.\nPress ESC to begin the Bell story cutscene and start the mission.', w * 0.5, h * 0.26, Math.min(820, w * 0.85));
+        }
+        ctx.restore(); // restore initial state for stability
     }
     
     // Draw opening cutscene (original)

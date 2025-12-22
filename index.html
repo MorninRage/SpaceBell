@@ -2082,6 +2082,19 @@
 
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
                     <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                        Player Name
+                    </label>
+                    <input id="playerNameInput" type="text"
+                           onchange="game.updateSetting('playerName', this.value);"
+                           placeholder="Enter name for leaderboard"
+                           style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 200px;">
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Used for the leaderboard. Saved locally.
+                    </p>
+                </div>
+
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
                         FPS Cap
                     </label>
                     <select id="fpsCapSelect" onchange="game.updateSetting('fpsCap', this.value === 'unlimited' ? 'unlimited' : parseInt(this.value));"

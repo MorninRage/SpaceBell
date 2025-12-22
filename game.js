@@ -587,6 +587,9 @@ class SpaceShooterGame {
             screenShakeToggle: document.getElementById('screenShakeToggle'),
             fpsCapSelect: document.getElementById('fpsCapSelect'),
             particlesQualitySelect: document.getElementById('particlesQualitySelect'),
+            pairEffectsQualitySelect: document.getElementById('pairEffectsQualitySelect'),
+            backgroundToggle: document.getElementById('backgroundToggle'),
+            graphicsPresetSelect: document.getElementById('graphicsPresetSelect'),
             
             // Inventory List Elements
             inventoryWeaponsList: document.getElementById('inventoryWeaponsList'),
@@ -5251,7 +5254,10 @@ class SpaceShooterGame {
                     showExplosions: settings.showExplosions !== undefined ? settings.showExplosions : true,
                     screenShake: settings.screenShake !== undefined ? settings.screenShake : true,
                     fpsCap: settings.fpsCap !== undefined ? settings.fpsCap : 60,
-                    particlesQuality: settings.particlesQuality || 'high'
+                    particlesQuality: settings.particlesQuality || 'high',
+                    pairEffectsQuality: settings.pairEffectsQuality || 'high',
+                    backgroundEnabled: settings.backgroundEnabled !== undefined ? settings.backgroundEnabled : true,
+                    graphicsPreset: settings.graphicsPreset || 'custom'
                 };
             }
         } catch (e) {
@@ -5264,7 +5270,10 @@ class SpaceShooterGame {
             showExplosions: true,
             screenShake: true,
             fpsCap: 60,
-            particlesQuality: 'high'
+            particlesQuality: 'high',
+            pairEffectsQuality: 'high',
+            backgroundEnabled: true,
+            graphicsPreset: 'custom'
         };
     }
     
@@ -5315,6 +5324,21 @@ class SpaceShooterGame {
         if (particlesQualitySelect) {
             particlesQualitySelect.value = this.settings.particlesQuality || 'high';
         }
+
+        const pairEffectsQualitySelect = this._cachedElements.pairEffectsQualitySelect;
+        if (pairEffectsQualitySelect) {
+            pairEffectsQualitySelect.value = this.settings.pairEffectsQuality || 'high';
+        }
+
+        const backgroundToggle = this._cachedElements.backgroundToggle;
+        if (backgroundToggle) {
+            backgroundToggle.checked = this.settings.backgroundEnabled !== false;
+        }
+
+        const graphicsPresetSelect = this._cachedElements.graphicsPresetSelect;
+        if (graphicsPresetSelect) {
+            graphicsPresetSelect.value = this.settings.graphicsPreset || 'custom';
+        }
     }
     
     isFullscreen() {
@@ -5360,6 +5384,8 @@ class SpaceShooterGame {
         this.settings[setting] = value;
         if (setting === 'fpsCap') {
             this.updateFpsCap();
+        } else if (setting === 'graphicsPreset') {
+            this.applyGraphicsPreset(value);
         }
         this.saveSettings();
         this.updateSettingsUI();
@@ -5372,6 +5398,34 @@ class SpaceShooterGame {
             return;
         }
         this._fpsCapInterval = 1000 / cap;
+    }
+    
+    applyGraphicsPreset(preset) {
+        if (preset === 'performance') {
+            this.settings.graphicsPreset = 'performance';
+            this.settings.particlesQuality = 'low';
+            this.settings.pairEffectsQuality = 'low';
+            this.settings.showExplosions = false;
+            this.settings.showParticles = false;
+            this.settings.screenShake = false;
+            this.settings.backgroundEnabled = false;
+            this.settings.fpsCap = 60;
+            this.updateFpsCap();
+        } else if (preset === 'high') {
+            this.settings.graphicsPreset = 'high';
+            this.settings.particlesQuality = 'high';
+            this.settings.pairEffectsQuality = 'high';
+            this.settings.showExplosions = true;
+            this.settings.showParticles = true;
+            this.settings.screenShake = true;
+            this.settings.backgroundEnabled = true;
+            this.settings.fpsCap = 120;
+            this.updateFpsCap();
+        }
+        // Mark as custom if preset is not recognized
+        if (preset !== 'performance' && preset !== 'high') {
+            this.settings.graphicsPreset = 'custom';
+        }
     }
     
     togglePanel(panelName) {
@@ -11189,17 +11243,19 @@ class SpaceShooterGame {
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
         // Draw background - boss mode has special background, otherwise mode-specific backgrounds
-        if (this.bossMode) {
-            this.drawBossBackground();
-        } else {
-            // Mode-specific enhanced backgrounds
-            if (this.mode === 'bell') {
-                this.drawBellModeBackground();
-            } else if (this.mode === 'individual') {
-                this.drawIndividualModeBackground();
+        if (this.settings.backgroundEnabled !== false) {
+            if (this.bossMode) {
+                this.drawBossBackground();
             } else {
-                // Ensemble QM mode (default)
-                this.drawEnsembleModeBackground();
+                // Mode-specific enhanced backgrounds
+                if (this.mode === 'bell') {
+                    this.drawBellModeBackground();
+                } else if (this.mode === 'individual') {
+                    this.drawIndividualModeBackground();
+                } else {
+                    // Ensemble QM mode (default)
+                    this.drawEnsembleModeBackground();
+                }
             }
         }
         
@@ -18803,6 +18859,9 @@ class SpaceShooterGame {
             const bIsPuzzle = activePuzzleId && (pair.b?.puzzleId === activePuzzleId || pair.b?.puzzleProxyId === activePuzzleId);
             const isPuzzlePair = aIsPuzzle || bIsPuzzle;
             const puzzleGlow = isPuzzlePair && revealActive;
+                const pairQuality = this.settings.pairEffectsQuality || 'high';
+                const pairIsOff = pairQuality === 'off';
+                const pairIsLow = pairQuality === 'low';
 
             // Offscreen cull: skip non-puzzle pairs fully offscreen
             const inView = (p) => p && p.x >= -margin && p.x <= (this.canvas?.width || 0) + margin &&
@@ -18816,19 +18875,25 @@ class SpaceShooterGame {
             const midY = (pair.a.y + pair.b.y) / 2;
             
             // Enhanced Bell pair connection - quantum entanglement bond
-            const bondPulse = 0.5 + Math.sin(time * 1.5 + pairIndex) * 0.3;
-            const puzzlePulse = puzzleGlow ? (0.8 + Math.sin(time * 3 + pairIndex) * 0.2) : 0;
+                const bondPulse = 0.5 + Math.sin(time * 1.5 + pairIndex) * 0.3;
+                const puzzlePulse = puzzleGlow ? (0.8 + Math.sin(time * 3 + pairIndex) * 0.2) : 0;
             
             // Main entanglement bond with gradient (heavy glow only for active pair)
-            const bondGradient = this.ctx.createLinearGradient(pair.a.x, pair.a.y, pair.b.x, pair.b.y);
-            bondGradient.addColorStop(0, puzzleGlow ? `rgba(255, 230, 180, ${0.6 + 0.3 * puzzlePulse})` : `rgba(79, 195, 247, ${0.6 * bondPulse})`);
-            bondGradient.addColorStop(0.5, puzzleGlow ? `rgba(255, 200, 140, ${0.8 + 0.3 * puzzlePulse})` : `rgba(129, 212, 250, ${0.8 * bondPulse})`);
-            bondGradient.addColorStop(1, puzzleGlow ? `rgba(255, 230, 180, ${0.6 + 0.3 * puzzlePulse})` : `rgba(79, 195, 247, ${0.6 * bondPulse})`);
-            
-            this.ctx.strokeStyle = bondGradient;
-            this.ctx.lineWidth = puzzleGlow ? 4 : 2;
-            this.ctx.shadowBlur = (puzzleGlow && drawHeavy) ? 16 : 0; // no shadow on non-active pairs
-            this.ctx.shadowColor = puzzleGlow ? 'rgba(255, 230, 180, 0.6)' : 'rgba(0,0,0,0)';
+                let strokeStyle;
+                if (pairIsOff) {
+                    strokeStyle = `rgba(79, 195, 247, ${0.6 * bondPulse})`;
+                } else {
+                    const bondGradient = this.ctx.createLinearGradient(pair.a.x, pair.a.y, pair.b.x, pair.b.y);
+                    bondGradient.addColorStop(0, puzzleGlow ? `rgba(255, 230, 180, ${0.6 + 0.3 * puzzlePulse})` : `rgba(79, 195, 247, ${0.6 * bondPulse})`);
+                    bondGradient.addColorStop(0.5, puzzleGlow ? `rgba(255, 200, 140, ${0.8 + 0.3 * puzzlePulse})` : `rgba(129, 212, 250, ${0.8 * bondPulse})`);
+                    bondGradient.addColorStop(1, puzzleGlow ? `rgba(255, 230, 180, ${0.6 + 0.3 * puzzlePulse})` : `rgba(79, 195, 247, ${0.6 * bondPulse})`);
+                    strokeStyle = bondGradient;
+                }
+                
+                this.ctx.strokeStyle = strokeStyle;
+                this.ctx.lineWidth = puzzleGlow ? 4 : pairIsLow ? 1.5 : 2;
+                this.ctx.shadowBlur = (puzzleGlow && !pairIsLow && !pairIsOff && drawHeavy) ? 16 : 0; // no shadow on low/off
+                this.ctx.shadowColor = puzzleGlow ? 'rgba(255, 230, 180, 0.6)' : 'rgba(0,0,0,0)';
             this.ctx.beginPath();
             this.ctx.moveTo(pair.a.x, pair.a.y);
             this.ctx.lineTo(pair.b.x, pair.b.y);
@@ -18836,23 +18901,27 @@ class SpaceShooterGame {
             this.ctx.shadowBlur = 0;
             
             // Energy flow along bond (animated)
-            const flowPosition = (time * 0.3 + pairIndex) % 1;
-            const flowX = pair.a.x + (pair.b.x - pair.a.x) * flowPosition;
-            const flowY = pair.a.y + (pair.b.y - pair.a.y) * flowPosition;
-            
-            this.ctx.fillStyle = `rgba(129, 212, 250, ${0.9 * bondPulse})`;
-            this.ctx.beginPath();
-            this.ctx.arc(flowX, flowY, 3, 0, Math.PI * 2);
-            this.ctx.fill();
+            if (!pairIsOff) {
+                const flowPosition = (time * 0.3 + pairIndex) % 1;
+                const flowX = pair.a.x + (pair.b.x - pair.a.x) * flowPosition;
+                const flowY = pair.a.y + (pair.b.y - pair.a.y) * flowPosition;
+                
+                this.ctx.fillStyle = `rgba(129, 212, 250, ${0.9 * bondPulse})`;
+                this.ctx.beginPath();
+                this.ctx.arc(flowX, flowY, 3, 0, Math.PI * 2);
+                this.ctx.fill();
+            }
             
             // Quantum correlation field (pulsing rings at midpoint)
-            this.ctx.strokeStyle = `rgba(79, 195, 247, ${0.4 * bondPulse})`;
-            this.ctx.lineWidth = 1.5;
-            for (let i = 1; i <= 2; i++) {
-                const ringRadius = (distance * 0.1 * i) * bondPulse;
-                this.ctx.beginPath();
-                this.ctx.arc(midX, midY, ringRadius, 0, Math.PI * 2);
-                this.ctx.stroke();
+            if (!pairIsOff) {
+                this.ctx.strokeStyle = `rgba(79, 195, 247, ${0.4 * bondPulse})`;
+                this.ctx.lineWidth = 1.5;
+                for (let i = 1; i <= 2; i++) {
+                    const ringRadius = (distance * 0.1 * i) * bondPulse;
+                    this.ctx.beginPath();
+                    this.ctx.arc(midX, midY, ringRadius, 0, Math.PI * 2);
+                    this.ctx.stroke();
+                }
             }
 
             // Enhanced Bell pair particles
@@ -18884,8 +18953,8 @@ class SpaceShooterGame {
                 
                 // Enhanced glow
                 const usePuzzleGlow = showPuzzle && drawHeavy;
-                this.ctx.shadowBlur = usePuzzleGlow ? Math.min(14, particleSize * 1.8) : 0;
-                this.ctx.shadowColor = usePuzzleGlow ? 'rgba(255, 230, 180, 0.6)' : 'rgba(0,0,0,0)';
+                this.ctx.shadowBlur = (usePuzzleGlow && !pairIsOff && !pairIsLow) ? Math.min(14, particleSize * 1.8) : 0;
+                this.ctx.shadowColor = (usePuzzleGlow && !pairIsOff && !pairIsLow) ? 'rgba(255, 230, 180, 0.6)' : 'rgba(0,0,0,0)';
                 this.ctx.fill();
                 this.ctx.shadowBlur = 0;
                 

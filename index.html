@@ -2096,6 +2096,18 @@
                         Limit frame rate to reduce CPU/GPU use on lower-end systems.
                     </p>
                 </div>
+
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="backgroundToggle"
+                               onchange="game.updateSetting('backgroundEnabled', this.checked);"
+                               style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                        Background Effects
+                    </label>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px; margin-left: 30px;">
+                        Toggle backgrounds/grids; disable for better performance on older systems.
+                    </p>
+                </div>
             </div>
             
             <div class="shop-section">
@@ -2126,6 +2138,36 @@
                     </select>
                     <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
                         Lower quality reduces particle count and glow for better performance.
+                    </p>
+                </div>
+
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                        Pair Effects Quality
+                    </label>
+                    <select id="pairEffectsQualitySelect" onchange="game.updateSetting('pairEffectsQuality', this.value);"
+                            style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 180px;">
+                        <option value="high">High</option>
+                        <option value="low">Low</option>
+                        <option value="off">Off</option>
+                    </select>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Lower quality simplifies Bell pair bonds and endpoints.
+                    </p>
+                </div>
+
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                        Graphics Preset
+                    </label>
+                    <select id="graphicsPresetSelect" onchange="game.updateSetting('graphicsPreset', this.value);"
+                            style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 180px;">
+                        <option value="custom">Custom</option>
+                        <option value="performance">Performance</option>
+                        <option value="high">High</option>
+                    </select>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Quick presets for effects and FPS cap; adjust to taste afterward.
                     </p>
                 </div>
                 

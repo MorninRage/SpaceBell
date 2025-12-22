@@ -2079,6 +2079,23 @@
                         Toggle fullscreen mode for immersive gameplay (Press F11 to toggle - ESC will not exit fullscreen)
                     </p>
                 </div>
+
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                        FPS Cap
+                    </label>
+                    <select id="fpsCapSelect" onchange="game.updateSetting('fpsCap', this.value === 'unlimited' ? 'unlimited' : parseInt(this.value));"
+                            style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 180px;">
+                        <option value="unlimited">Unlimited</option>
+                        <option value="30">30 FPS</option>
+                        <option value="60">60 FPS</option>
+                        <option value="90">90 FPS</option>
+                        <option value="120">120 FPS</option>
+                    </select>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Limit frame rate to reduce CPU/GPU use on lower-end systems.
+                    </p>
+                </div>
             </div>
             
             <div class="shop-section">
@@ -2093,6 +2110,22 @@
                     </label>
                     <p style="color: #aaa; font-size: 0.85em; margin-top: 5px; margin-left: 30px;">
                         Enable visual particle effects for explosions and impacts
+                    </p>
+                </div>
+
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                        Particle Quality
+                    </label>
+                    <select id="particlesQualitySelect" onchange="game.updateSetting('particlesQuality', this.value);"
+                            style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 180px;">
+                        <option value="high">High</option>
+                        <option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                        <option value="off">Off</option>
+                    </select>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Lower quality reduces particle count and glow for better performance.
                     </p>
                 </div>
                 

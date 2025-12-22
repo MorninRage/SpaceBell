@@ -108,6 +108,15 @@ class AudioManager {
         
     }
     
+    updateFpsCap() {
+        const cap = this.settings?.fpsCap;
+        if (!cap || cap === 'unlimited' || cap <= 0) {
+            this._fpsCapInterval = 0;
+            return;
+        }
+        this._fpsCapInterval = 1000 / cap;
+    }
+    
     // Initialize audio (HTML5 Audio doesn't need special setup, but we'll use this for user interaction)
     init() {
         // HTML5 Audio works immediately, but browsers require user interaction to play
@@ -586,6 +595,8 @@ class SpaceShooterGame {
             particlesToggle: document.getElementById('particlesToggle'),
             explosionsToggle: document.getElementById('explosionsToggle'),
             screenShakeToggle: document.getElementById('screenShakeToggle'),
+            fpsCapSelect: document.getElementById('fpsCapSelect'),
+            particlesQualitySelect: document.getElementById('particlesQualitySelect'),
             
             // Inventory List Elements
             inventoryWeaponsList: document.getElementById('inventoryWeaponsList'),
@@ -1085,6 +1096,11 @@ class SpaceShooterGame {
         this.enemySpawnRate = 8000; // Spawn enemy every 8 seconds in Bell mode (more time between spawns)
         this.enemyShotRate = 1500; // Enemy shoots every 1.5 seconds
         this.maxEnemyShipsCap = 8; // Hard cap to limit Bell mode load
+
+        // FPS cap tracking
+        this._fpsCapInterval = 0;
+        this._lastFpsFrameTime = 0;
+        this.updateFpsCap();
         
         // Survival system - Einstein's hunger and nutrition
         this.hunger = 100; // 0-100, starts at full
@@ -5242,7 +5258,9 @@ class SpaceShooterGame {
                     gamepadSensitivity: settings.gamepadSensitivity || 600,
                     showParticles: settings.showParticles !== undefined ? settings.showParticles : true,
                     showExplosions: settings.showExplosions !== undefined ? settings.showExplosions : true,
-                    screenShake: settings.screenShake !== undefined ? settings.screenShake : true
+                    screenShake: settings.screenShake !== undefined ? settings.screenShake : true,
+                    fpsCap: settings.fpsCap !== undefined ? settings.fpsCap : 60,
+                    particlesQuality: settings.particlesQuality || 'high'
                 };
             }
         } catch (e) {
@@ -5253,7 +5271,9 @@ class SpaceShooterGame {
             gamepadSensitivity: 600,
             showParticles: true,
             showExplosions: true,
-            screenShake: true
+            screenShake: true,
+            fpsCap: 60,
+            particlesQuality: 'high'
         };
     }
     
@@ -5293,6 +5313,16 @@ class SpaceShooterGame {
         
         if (screenShakeToggle) {
             screenShakeToggle.checked = this.settings.screenShake;
+        }
+
+        const fpsCapSelect = this._cachedElements.fpsCapSelect;
+        if (fpsCapSelect) {
+            fpsCapSelect.value = String(this.settings.fpsCap ?? 'unlimited');
+        }
+
+        const particlesQualitySelect = this._cachedElements.particlesQualitySelect;
+        if (particlesQualitySelect) {
+            particlesQualitySelect.value = this.settings.particlesQuality || 'high';
         }
     }
     
@@ -5337,6 +5367,9 @@ class SpaceShooterGame {
     
     updateSetting(setting, value) {
         this.settings[setting] = value;
+        if (setting === 'fpsCap') {
+            this.updateFpsCap();
+        }
         this.saveSettings();
         this.updateSettingsUI();
     }
@@ -7791,9 +7824,14 @@ class SpaceShooterGame {
     
     getParticleBudget() {
         const load = this.getEntityLoadScore();
-        if (load > 50) return 250;
-        if (load > 35) return 350;
-        return 500; // default
+        let base;
+        if (load > 50) base = 250;
+        else if (load > 35) base = 350;
+        else base = 500;
+
+        const quality = this.settings.particlesQuality || 'high';
+        const scale = quality === 'off' ? 0 : quality === 'low' ? 0.5 : quality === 'medium' ? 0.8 : 1;
+        return Math.floor(base * scale);
     }
 
     createExplosion(x, y) {
@@ -7805,8 +7843,14 @@ class SpaceShooterGame {
         const budget = this.getParticleBudget();
         if (this.particles.length >= budget) return;
         
-        const particleCount = loadScore > 50 ? 6 : loadScore > 35 ? 10 : 15;
-        const coreCount = loadScore > 50 ? 2 : loadScore > 35 ? 3 : 5;
+        const quality = this.settings.particlesQuality || 'high';
+        const qualityScale = quality === 'off' ? 0 : quality === 'low' ? 0.4 : quality === 'medium' ? 0.7 : 1;
+        if (qualityScale === 0) return;
+        
+        const baseCount = loadScore > 50 ? 6 : loadScore > 35 ? 10 : 15;
+        const particleCount = Math.max(1, Math.floor(baseCount * qualityScale));
+        const baseCore = loadScore > 50 ? 2 : loadScore > 35 ? 3 : 5;
+        const coreCount = Math.max(1, Math.floor(baseCore * qualityScale));
         
         // Enhanced explosion with more particles and variety
         for (let i = 0; i < particleCount; i++) {
@@ -40731,6 +40775,16 @@ class SpaceShooterGame {
 
     gameLoop() {
         const now = performance.now();
+
+        // FPS cap: skip frame if interval not reached
+        if (this._fpsCapInterval && this._lastFpsFrameTime) {
+            const elapsed = now - this._lastFpsFrameTime;
+            if (elapsed < this._fpsCapInterval) {
+                requestAnimationFrame(() => this.gameLoop());
+                return;
+            }
+        }
+        this._lastFpsFrameTime = now;
         
         // Check if game is paused or in a menu state
         const isGamePaused = (this.isPaused && this.gameState === 'playing') || 

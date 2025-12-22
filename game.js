@@ -5432,7 +5432,7 @@ class SpaceShooterGame {
     
     updateFpsCap() {
         const cap = this.settings?.fpsCap;
-        if (!cap || cap === 'unlimited' || cap <= 0) {
+        if (!cap || cap === 'unlimited' || cap === 'vsync' || cap <= 0) {
             this._fpsCapInterval = 0;
             return;
         }
@@ -22282,23 +22282,47 @@ class SpaceShooterGame {
             particleMultiplier *= 0.9; // Additional 10% reduction
         }
         
-        // Use adaptive quality (based on FPS) instead of bullet-count-based quality
-        // This preserves visual quality unless performance actually drops
-        const renderingQuality = this.adaptiveQuality;
+        // Maintain a short-lived quality lock so bursts immediately downgrade visuals
+        // without relying on averaged FPS alone.
+        if (!this._qualityLock) {
+            this._qualityLock = { mode: null, frames: 0 };
+        }
+
+        // Base quality comes from adaptive FPS but can be overridden by load.
+        let renderingQuality = this.adaptiveQuality || 'ultra';
+
+        // Burst and density overrides (tuned to keep enhanced bullets for rapid/spread at low counts).
+        const isBurst = bulletCount >= 90 || (bulletCount >= 70 && effectiveFireRateMultiplier >= 3.2);
+        const isHeavy = bulletCount >= 70 || (bulletCount >= 50 && effectiveFireRateMultiplier >= 2.5);
+        const isElevated = bulletCount >= 45 || (bulletCount >= 35 && effectiveFireRateMultiplier >= 2.0);
+
+        // Only lock when counts are truly high; otherwise keep full effects for rapid/spread.
+        if (isBurst) {
+            this._qualityLock = { mode: 'minimal', frames: 16 };
+        } else if (isHeavy && this._qualityLock.frames === 0) {
+            this._qualityLock = { mode: 'low', frames: 16 };
+        } else if (isElevated && this._qualityLock.frames === 0 && renderingQuality === 'ultra') {
+            // Drop to medium for moderate bursts; expires quickly so visuals return.
+            this._qualityLock = { mode: 'medium', frames: 12 };
+        }
+
+        if (this._qualityLock.frames > 0) {
+            renderingQuality = this._qualityLock.mode;
+            this._qualityLock.frames--;
+        }
+
+        // Feature toggles per quality tier (ultra > high > medium > low > minimal)
+        const useGradients = renderingQuality === 'ultra' || renderingQuality === 'high';
+        const useShadows = renderingQuality === 'ultra' || renderingQuality === 'high';
+        const useTrails = renderingQuality !== 'minimal';
+        const useGlow = renderingQuality === 'ultra' || renderingQuality === 'high';
+        const useParticles = renderingQuality === 'ultra' || renderingQuality === 'high' || renderingQuality === 'medium';
         
         // Helper variables for conditional rendering
         const isHighBulletCount = bulletCount > 15;
         const isVeryHighBulletCount = bulletCount > 30;
         const isHighFireRate = effectiveFireRateMultiplier > 2.0;
         const isVeryHighFireRate = effectiveFireRateMultiplier > 3.0;
-        
-        // ALWAYS keep visual effects - only reduce particle counts
-        // This preserves the enhanced look while optimizing performance
-        const useGradients = true; // Always use gradients
-        const useShadows = renderingQuality !== 'medium' && bulletCount < 50; // Disable shadows only if FPS is bad or bullet count very high
-        const useTrails = true; // Always use trails
-        const useGlow = true; // Always use glow
-        const useParticles = true; // Always use particles, just reduce count
         
         // Smart culling: Only render bullets that are on-screen or very close to screen
         // More aggressive culling when bullet count is high
@@ -22323,6 +22347,32 @@ class SpaceShooterGame {
             
             const time = this.time || 0;
             const weaponName = bullet.weaponName || 'basic';
+
+            // Minimal/low fast paths to avoid expensive gradients/shadows entirely.
+            if (renderingQuality === 'minimal') {
+                const bulletSize = bullet.size || 4;
+                this.ctx.fillStyle = bullet.color || '#66bb6a';
+                this.ctx.beginPath();
+                this.ctx.arc(bullet.x, bullet.y, bulletSize, 0, Math.PI * 2);
+                this.ctx.fill();
+                continue;
+            } else if (renderingQuality === 'low') {
+                const bulletSize = bullet.size || 5;
+                this.ctx.fillStyle = bullet.color || '#66bb6a';
+                this.ctx.beginPath();
+                this.ctx.arc(bullet.x, bullet.y, bulletSize, 0, Math.PI * 2);
+                this.ctx.fill();
+                // Simple trail line without gradients/shadows
+                const angle = Math.atan2(bullet.vy, bullet.vx);
+                this.ctx.strokeStyle = bullet.trailColor || 'rgba(102, 187, 106, 0.6)';
+                this.ctx.lineWidth = 2;
+                this.ctx.lineCap = 'round';
+                this.ctx.beginPath();
+                this.ctx.moveTo(bullet.x, bullet.y);
+                this.ctx.lineTo(bullet.x - Math.cos(angle) * 12, bullet.y - Math.sin(angle) * 12);
+                this.ctx.stroke();
+                continue;
+            }
             
             // Enhanced Basic Weapon Bullets
             if (weaponName === 'basic') {
@@ -22414,7 +22464,7 @@ class SpaceShooterGame {
                 }
                 
                 // Always create trail particles (just reduce count based on particleMultiplier)
-                const trailParticleCount = Math.max(1, Math.floor(3 * particleMultiplier));
+                const trailParticleCount = useParticles ? Math.max(1, Math.floor(3 * particleMultiplier)) : 0;
                 for (let i = 0; i < trailParticleCount; i++) {
                     const particlePos = (i + 1) / (trailParticleCount + 1);
                     const particleX = bullet.x - Math.cos(angle) * trailLength * particlePos;

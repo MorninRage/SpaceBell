@@ -2097,13 +2097,15 @@
                     <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
                         FPS Cap
                     </label>
-                    <select id="fpsCapSelect" onchange="game.updateSetting('fpsCap', this.value === 'unlimited' ? 'unlimited' : parseInt(this.value));"
+                    <select id="fpsCapSelect" onchange="game.updateSetting('fpsCap', this.value === 'unlimited' ? 'unlimited' : (this.value === 'vsync' ? 'vsync' : parseInt(this.value)));"
                             style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 180px;">
                         <option value="unlimited">Unlimited</option>
                         <option value="30">30 FPS</option>
                         <option value="60">60 FPS</option>
                         <option value="90">90 FPS</option>
                         <option value="120">120 FPS</option>
+                        <option value="239">239 FPS</option>
+                        <option value="vsync">V-Sync (match display)</option>
                     </select>
                     <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
                         Limit frame rate to reduce CPU/GPU use on lower-end systems.

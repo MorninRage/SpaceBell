@@ -6735,30 +6735,10 @@ class SpaceShooterGame {
 
         // Update pairs
         this.pairs = this.pairs.filter(pair => {
-            const maxPairSpeed = 200;
-            const damp = 0.996;
-            const minSpeed = 18;
-            // Move and damp velocities; gentle kick if almost stationary
-            [pair.a, pair.b].forEach(p => {
-                let speed = Math.hypot(p.vx, p.vy);
-                if (speed < minSpeed) {
-                    // Add a small random impulse to keep motion/rotation, but smaller to avoid fast spin
-                    const ang = Math.random() * Math.PI * 2;
-                    const impulse = minSpeed * (0.4 + Math.random() * 0.4);
-                    p.vx += Math.cos(ang) * impulse;
-                    p.vy += Math.sin(ang) * impulse;
-                    speed = Math.hypot(p.vx, p.vy);
-                }
-                if (speed > maxPairSpeed) {
-                    const scale = maxPairSpeed / speed;
-                    p.vx *= scale;
-                    p.vy *= scale;
-                }
-                p.x += p.vx * deltaTime;
-                p.y += p.vy * deltaTime;
-                p.vx *= damp;
-                p.vy *= damp;
-            });
+            pair.a.x += pair.a.vx * deltaTime;
+            pair.a.y += pair.a.vy * deltaTime;
+            pair.b.x += pair.b.vx * deltaTime;
+            pair.b.y += pair.b.vy * deltaTime;
             
             // OPTIMIZATION: Use squared distance for comparison (avoid sqrt)
             const dx = pair.b.x - pair.a.x;
@@ -6780,18 +6760,8 @@ class SpaceShooterGame {
             }
             
             [pair.a, pair.b].forEach(p => {
-                const radius = p.size || 15;
-                let bounced = false;
-                if (p.x < radius) { p.x = radius + 2; p.vx = -p.vx * 0.6; bounced = true; }
-                else if (p.x > this.canvas.width - radius) { p.x = this.canvas.width - radius - 2; p.vx = -p.vx * 0.6; bounced = true; }
-                if (p.y < radius) { p.y = radius + 2; p.vy = -p.vy * 0.6; bounced = true; }
-                else if (p.y > this.canvas.height - radius) { p.y = this.canvas.height - radius - 2; p.vy = -p.vy * 0.6; bounced = true; }
-                if (bounced) {
-                    // soften stickiness by injecting a tiny tangent nudge
-                    const tangAng = Math.random() * Math.PI * 2;
-                    p.vx += Math.cos(tangAng) * 10;
-                    p.vy += Math.sin(tangAng) * 10;
-                }
+                if (p.x < p.size || p.x > this.canvas.width - p.size) p.vx *= -1;
+                if (p.y < p.size || p.y > this.canvas.height - p.size) p.vy *= -1;
             });
             
             // Boost mode: Destroy pairs on contact (but keep puzzle targets alive)

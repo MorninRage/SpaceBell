@@ -6735,11 +6735,20 @@ class SpaceShooterGame {
 
         // Update pairs
         this.pairs = this.pairs.filter(pair => {
-            const maxPairSpeed = 220;
-            const damp = 0.995;
-            // Move and damp velocities
+            const maxPairSpeed = 240;
+            const damp = 0.998;
+            const minSpeed = 35;
+            // Move and damp velocities; give a gentle kick if almost stationary
             [pair.a, pair.b].forEach(p => {
-                const speed = Math.hypot(p.vx, p.vy);
+                let speed = Math.hypot(p.vx, p.vy);
+                if (speed < minSpeed) {
+                    // Add a small random impulse to keep motion/rotation
+                    const ang = Math.random() * Math.PI * 2;
+                    const impulse = minSpeed * (0.6 + Math.random() * 0.6);
+                    p.vx += Math.cos(ang) * impulse;
+                    p.vy += Math.sin(ang) * impulse;
+                    speed = Math.hypot(p.vx, p.vy);
+                }
                 if (speed > maxPairSpeed) {
                     const scale = maxPairSpeed / speed;
                     p.vx *= scale;
@@ -6762,12 +6771,12 @@ class SpaceShooterGame {
                 const angle = Math.atan2(dy, dx);
                 pair.b.x = pair.a.x + Math.cos(angle) * 200;
                 pair.b.y = pair.a.y + Math.sin(angle) * 200;
-                // Nudge velocities inward to avoid rapid rebounds
-                const pull = 40;
-                pair.a.vx *= 0.8;
-                pair.a.vy *= 0.8;
-                pair.b.vx = Math.cos(angle) * pull;
-                pair.b.vy = Math.sin(angle) * pull;
+                // Blend a modest inward pull without killing existing motion
+                const pull = 20;
+                pair.a.vx = pair.a.vx * 0.9 + Math.cos(angle + Math.PI) * pull * 0.3;
+                pair.a.vy = pair.a.vy * 0.9 + Math.sin(angle + Math.PI) * pull * 0.3;
+                pair.b.vx = pair.b.vx * 0.9 + Math.cos(angle) * pull;
+                pair.b.vy = pair.b.vy * 0.9 + Math.sin(angle) * pull;
             }
             
             [pair.a, pair.b].forEach(p => {

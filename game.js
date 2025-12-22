@@ -6746,11 +6746,27 @@ class SpaceShooterGame {
             const distanceSquared = dx * dx + dy * dy;
             const maxDistanceSquared = 200 * 200; // 200^2 = 40000
             if (distanceSquared > maxDistanceSquared) {
-                // Need actual distance for angle calculation
+                // Symmetric correction: pull both ends toward allowable distance
                 const distance = Math.sqrt(distanceSquared);
-                const angle = Math.atan2(dy, dx);
-                pair.b.x = pair.a.x + Math.cos(angle) * 200;
-                pair.b.y = pair.a.y + Math.sin(angle) * 200;
+                if (distance > 0.0001) {
+                    const excess = distance - 200;
+                    const nx = dx / distance;
+                    const ny = dy / distance;
+                    const correction = excess * 0.5;
+                    pair.a.x -= nx * correction;
+                    pair.a.y -= ny * correction;
+                    pair.b.x += nx * correction;
+                    pair.b.y += ny * correction;
+                    
+                    // Radial damping for this frame: reduce outward velocity component, keep tangential
+                    const dotA = pair.a.vx * nx + pair.a.vy * ny;
+                    const dotB = pair.b.vx * nx + pair.b.vy * ny;
+                    const radialDamp = 0.5;
+                    pair.a.vx -= dotA * nx * radialDamp;
+                    pair.a.vy -= dotA * ny * radialDamp;
+                    pair.b.vx -= dotB * nx * radialDamp;
+                    pair.b.vy -= dotB * ny * radialDamp;
+                }
             }
             
             [pair.a, pair.b].forEach(p => {

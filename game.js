@@ -107,16 +107,6 @@ class AudioManager {
         };
         
     }
-    
-    updateFpsCap() {
-        const cap = this.settings?.fpsCap;
-        if (!cap || cap === 'unlimited' || cap <= 0) {
-            this._fpsCapInterval = 0;
-            return;
-        }
-        this._fpsCapInterval = 1000 / cap;
-    }
-    
     // Initialize audio (HTML5 Audio doesn't need special setup, but we'll use this for user interaction)
     init() {
         // HTML5 Audio works immediately, but browsers require user interaction to play
@@ -1101,6 +1091,7 @@ class SpaceShooterGame {
         this._fpsCapInterval = 0;
         this._lastFpsFrameTime = 0;
         this.updateFpsCap();
+        this._lastFpsFrameTime = performance.now();
         
         // Survival system - Einstein's hunger and nutrition
         this.hunger = 100; // 0-100, starts at full
@@ -5372,6 +5363,15 @@ class SpaceShooterGame {
         }
         this.saveSettings();
         this.updateSettingsUI();
+    }
+    
+    updateFpsCap() {
+        const cap = this.settings?.fpsCap;
+        if (!cap || cap === 'unlimited' || cap <= 0) {
+            this._fpsCapInterval = 0;
+            return;
+        }
+        this._fpsCapInterval = 1000 / cap;
     }
     
     togglePanel(panelName) {
@@ -40777,7 +40777,7 @@ class SpaceShooterGame {
         const now = performance.now();
 
         // FPS cap: skip frame if interval not reached
-        if (this._fpsCapInterval && this._lastFpsFrameTime) {
+        if (this._fpsCapInterval) {
             const elapsed = now - this._lastFpsFrameTime;
             if (elapsed < this._fpsCapInterval) {
                 requestAnimationFrame(() => this.gameLoop());

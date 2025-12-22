@@ -6735,10 +6735,21 @@ class SpaceShooterGame {
 
         // Update pairs
         this.pairs = this.pairs.filter(pair => {
-            pair.a.x += pair.a.vx * deltaTime;
-            pair.a.y += pair.a.vy * deltaTime;
-            pair.b.x += pair.b.vx * deltaTime;
-            pair.b.y += pair.b.vy * deltaTime;
+            const maxPairSpeed = 220;
+            const damp = 0.995;
+            // Move and damp velocities
+            [pair.a, pair.b].forEach(p => {
+                const speed = Math.hypot(p.vx, p.vy);
+                if (speed > maxPairSpeed) {
+                    const scale = maxPairSpeed / speed;
+                    p.vx *= scale;
+                    p.vy *= scale;
+                }
+                p.x += p.vx * deltaTime;
+                p.y += p.vy * deltaTime;
+                p.vx *= damp;
+                p.vy *= damp;
+            });
             
             // OPTIMIZATION: Use squared distance for comparison (avoid sqrt)
             const dx = pair.b.x - pair.a.x;
@@ -6751,11 +6762,20 @@ class SpaceShooterGame {
                 const angle = Math.atan2(dy, dx);
                 pair.b.x = pair.a.x + Math.cos(angle) * 200;
                 pair.b.y = pair.a.y + Math.sin(angle) * 200;
+                // Nudge velocities inward to avoid rapid rebounds
+                const pull = 40;
+                pair.a.vx *= 0.8;
+                pair.a.vy *= 0.8;
+                pair.b.vx = Math.cos(angle) * pull;
+                pair.b.vy = Math.sin(angle) * pull;
             }
             
             [pair.a, pair.b].forEach(p => {
                 if (p.x < p.size || p.x > this.canvas.width - p.size) p.vx *= -1;
                 if (p.y < p.size || p.y > this.canvas.height - p.size) p.vy *= -1;
+                // Clamp inside bounds to prevent rapid wall jitter
+                p.x = Math.min(Math.max(p.x, p.size), this.canvas.width - p.size);
+                p.y = Math.min(Math.max(p.y, p.size), this.canvas.height - p.size);
             });
             
             // Boost mode: Destroy pairs on contact (but keep puzzle targets alive)

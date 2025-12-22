@@ -3161,6 +3161,7 @@ class SpaceShooterGame {
                 return; // still cooling down
             }
             this.puzzleState.completed = false;
+            this.puzzleState.revealEnd = 0;
             this.startPuzzleSequence();
             return;
         }
@@ -3283,6 +3284,7 @@ class SpaceShooterGame {
         if (!this.puzzleState) return;
         this.puzzleState.sequence = [];
         this.puzzleState.progress = 0;
+        this.puzzleState.revealEnd = 0;
         this.targets.forEach(t => {
             t.puzzleId = null;
             t.puzzleActive = false;
@@ -3354,6 +3356,7 @@ class SpaceShooterGame {
             if (this.puzzleState.progress >= this.puzzleState.sequence.length) {
                 this.puzzleState.completed = true;
                 this.puzzleState.completedCount = (this.puzzleState.completedCount || 0) + 1;
+                    this.puzzleState.revealEnd = 0;
                 // Reduced reward since the puzzle is continuous
                 this.addNeurokeys(1);
                 // Start a cooldown before the next puzzle begins

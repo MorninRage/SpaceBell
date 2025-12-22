@@ -18832,8 +18832,9 @@ class SpaceShooterGame {
                 this.ctx.fill();
                 
                 // Enhanced glow
-                this.ctx.shadowBlur = showPuzzle && drawHeavy ? Math.min(14, particleSize * 1.8) : 0;
-                this.ctx.shadowColor = showPuzzle ? 'rgba(255, 230, 180, 0.6)' : 'rgba(0,0,0,0)';
+                const usePuzzleGlow = showPuzzle && drawHeavy;
+                this.ctx.shadowBlur = usePuzzleGlow ? Math.min(14, particleSize * 1.8) : 0;
+                this.ctx.shadowColor = usePuzzleGlow ? 'rgba(255, 230, 180, 0.6)' : 'rgba(0,0,0,0)';
                 this.ctx.fill();
                 this.ctx.shadowBlur = 0;
                 

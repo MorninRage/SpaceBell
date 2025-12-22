@@ -18635,10 +18635,10 @@ class SpaceShooterGame {
             const edgeColor = revealActive ? '#c86b1f' : '#0288d1';
             
             const gradient = this.ctx.createRadialGradient(target.x, target.y, 0, target.x, target.y, targetSize);
-            gradient.addColorStop(0, isPuzzle ? centerColor : '#81d4fa');
-            gradient.addColorStop(0.3, isPuzzle ? midColor : '#4fc3f7');
-            gradient.addColorStop(0.7, isPuzzle ? outerColor : '#29b6f6');
-            gradient.addColorStop(1, isPuzzle ? edgeColor : '#0288d1');
+            gradient.addColorStop(0, revealActive ? centerColor : '#81d4fa');
+            gradient.addColorStop(0.3, revealActive ? midColor : '#4fc3f7');
+            gradient.addColorStop(0.7, revealActive ? outerColor : '#29b6f6');
+            gradient.addColorStop(1, revealActive ? edgeColor : '#0288d1');
             this.ctx.fillStyle = gradient;
             
             // Main particle sphere
@@ -18648,8 +18648,8 @@ class SpaceShooterGame {
             
             // Enhanced glow effect (very obvious during reveal, then fades back to blue)
             const shadowBase = revealActive ? targetSize * 3.2 : targetSize * 1.5;
-            this.ctx.shadowBlur = shadowBase + (isPuzzle ? 6 : 0);
-            const glowAlpha = revealActive ? 0.9 : (isPuzzle ? 0.35 + 0.25 * puzzleFlash : 0.35 * basePulse);
+            this.ctx.shadowBlur = shadowBase + (revealActive ? 6 : 0);
+            const glowAlpha = revealActive ? 0.9 : (0.35 * basePulse);
             this.ctx.shadowColor = revealActive
                 ? `rgba(255, 230, 180, ${glowAlpha})`
                 : `rgba(79, 195, 247, ${glowAlpha})`;
@@ -18659,7 +18659,7 @@ class SpaceShooterGame {
             // Quantum field rings (orbiting)
             this.ctx.strokeStyle = revealActive
                 ? `rgba(255, 230, 180, ${0.4 + 0.4 * puzzleFlash + revealFade})`
-                : `rgba(79, 195, 247, ${0.6 * (isPuzzle ? 0.9 + 0.1 * puzzleFlash : basePulse)})`;
+                : `rgba(79, 195, 247, ${0.6 * basePulse})`;
             this.ctx.lineWidth = revealActive ? 2.2 : 1.6;
             for (let i = 0; i < 2; i++) {
                 const ringAngle = time * 0.8 + i * Math.PI + index * 0.3;
@@ -18674,12 +18674,10 @@ class SpaceShooterGame {
             // Bright inner core
             const coreAlpha = revealActive
                 ? 0.95
-                : (isPuzzle ? 0.75 + 0.15 * puzzleFlash : 0.9 * basePulse);
+                : 0.9 * basePulse;
             this.ctx.fillStyle = revealActive
                 ? `rgba(255, 240, 200, ${coreAlpha})`
-                : (isPuzzle
-                    ? `rgba(129, 212, 250, ${coreAlpha})`
-                    : `rgba(129, 212, 250, ${0.9 * basePulse})`);
+                : `rgba(129, 212, 250, ${0.9 * basePulse})`;
             this.ctx.beginPath();
             this.ctx.arc(target.x, target.y, targetSize * 0.5, 0, Math.PI * 2);
             this.ctx.fill();
@@ -18687,7 +18685,7 @@ class SpaceShooterGame {
             // Quantum sparkles
             const sparkleAlpha = revealActive
                 ? 0.9 * (0.6 + puzzleFlash * 0.6)
-                : (isPuzzle ? 0.55 + 0.25 * puzzleFlash : 0.8 * basePulse);
+                : 0.8 * basePulse;
             this.ctx.fillStyle = `rgba(255, 255, 255, ${sparkleAlpha})`;
             for (let i = 0; i < 3; i++) {
                 const sparkleAngle = time * 2 + i * (Math.PI * 2 / 3) + index * 0.2;

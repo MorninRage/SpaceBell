@@ -2077,6 +2077,7 @@ class SpaceShooterGame {
                 const activePuzzleTarget = this.targets.find(t => t.puzzleId === currentId);
                 if (activePuzzleTarget) {
                     this.ensurePuzzleTargetPaired(activePuzzleTarget);
+                    this.setActivePuzzleTarget();
                 }
             }
         }

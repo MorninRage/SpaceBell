@@ -2213,6 +2213,12 @@ class SpaceShooterGame {
         
         // After boss is defeated, trigger level-up menu
         // The level was frozen during boss battle, so now we can show the level-up menu
+        // Reset level time anchor to prevent accumulated time from instantly advancing multiple levels
+        const baseTimePerLevel = 30;
+        const timeReduction = Math.min(40, Math.max(0, this.playerStats.levelTimeReduction)) / 100; // Clamp between 0-40%
+        const adjustedTimePerLevel = Math.max(10, baseTimePerLevel * (1 - timeReduction));
+        this.time = (this.level - 1) * adjustedTimePerLevel;
+        
         this.levelUpState = true;
         this.gameState = 'levelup';
         this.showLevelUpMenu();
@@ -5841,7 +5847,10 @@ class SpaceShooterGame {
             const newLevel = Math.floor(this.time / adjustedTimePerLevel) + 1;
             if (newLevel > this.level) {
                 const oldLevel = this.level;
-                this.level = newLevel;
+                // Advance only one level at a time to avoid multi-level skips
+                this.level = this.level + 1;
+                // Consume time for the completed level so we don't chain level-ups
+                this.time = (this.level - 1) * adjustedTimePerLevel;
                 
                 // Adjusted spawn rates for better balance, especially levels 1-5
                 // Levels 1-5: Slower target spawn (more time between particles), faster obstacle spawn (more molecules)

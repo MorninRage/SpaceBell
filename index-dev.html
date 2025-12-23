@@ -1266,6 +1266,406 @@
     
     <div id="gameContainer">
         <canvas id="gameCanvas"></canvas>
+
+        <div id="ui">
+            <h2>Beyond Bell: Space Shooter</h2>
+            <div class="mode-selector">
+                <button class="mode-btn" id="ensembleBtn">Ensemble QM</button>
+                <button class="mode-btn active" id="individualBtn">Individual System</button>
+                <button class="mode-btn" id="bellBtn">Bell Pairs</button>
+            </div>
+            <div class="stats">
+                <div class="stat-item">
+                    <span class="stat-label">Accuracy:</span>
+                    <span class="stat-value" id="accuracyDisplay">100%</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Mode:</span>
+                    <span class="stat-value" id="modeDisplay">Individual</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Targets:</span>
+                    <span class="stat-value" id="targetCount">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Materials Inventory Panel (compact) -->
+        <div id="materialsInventory">
+            <h3>Materials</h3>
+            <div class="stat-item">
+                <span class="stat-label">Electrons:</span>
+                <span class="stat-value" id="invQuantum">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Photons:</span>
+                <span class="stat-value" id="invEnergy">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Nuclei:</span>
+                <span class="stat-value" id="invMetal">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Energy Crystals:</span>
+                <span class="stat-value" id="invCrystals">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Energy Tokens:</span>
+                <span class="stat-value" id="invTokens">0</span>
+            </div>
+        </div>
+
+        <div id="theoryPanel">
+            <h3>Theory Panel</h3>
+            <div class="theory-section">
+                <h4>Current Mode</h4>
+                <p id="currentTheory">Individual System: Your shots hit exactly where you aim. Definite, precise outcomes.</p>
+            </div>
+            <div class="theory-section">
+                <h4>Shooting Mechanics</h4>
+                <p><strong>Ensemble QM:</strong> <span class="warning">Probabilistic</span> - Shots may miss even if you aim correctly. Statistical uncertainty.</p>
+                <p><strong>Individual System:</strong> <span class="success">Deterministic</span> - Shots hit exactly where aimed. Definite outcomes.</p>
+                <p><strong>Bell Pairs:</strong> <span class="warning">Correlated</span> - Shooting one target affects its pair. Requires pairs to test.</p>
+            </div>
+        </div>
+
+        <div id="instructions">
+            <h3>Controls</h3>
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Movement & Combat</h4>
+                <p><span class="key">WASD</span> or <span class="key">Arrow Keys</span> to move</p>
+                <p><span class="key">Click</span> or <span class="key">Space</span> to shoot</p>
+                <p><span class="key">Mouse</span> to aim (cursor follows mouse)</p>
+            </div>
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Weapons</h4>
+                <p><span class="key">Tab</span> to open/close weapon wheel</p>
+                <p><span class="key">Mouse Wheel</span> (in weapon wheel) to navigate</p>
+                <p><span class="key">Click</span> weapon in wheel to equip/unequip</p>
+            </div>
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Repair System</h4>
+                <p><span class="key">Q</span> (hold) to show repair selection</p>
+                <p><span class="key">Mouse Wheel</span> (while Q held) to select item</p>
+                <p><span class="key">Click</span> item to repair (requires hammer)</p>
+                <p><span class="key">Q</span> (tap) to equip/use hammer</p>
+            </div>
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Game Modes</h4>
+                <p><span class="key">1</span> Ensemble Mode</p>
+                <p><span class="key">2</span> Individual Mode</p>
+                <p><span class="key">3</span> Bell Pairs Mode</p>
+            </div>
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Items & Consumables</h4>
+                <p><span class="key">H</span> Use health pack</p>
+                <p><span class="key">X</span> Use atom split</p>
+            </div>
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Menus</h4>
+                <p><span class="key">ESC</span> Pause / Show all panels</p>
+                <p><span class="key">E</span> Equipment/Inventory</p>
+                <p><span class="key">L</span> Leaderboard</p>
+                <p><span class="key">F11</span> Toggle fullscreen</p>
+                <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">💡 Crafting & Shop appear automatically during level-up</p>
+            </div>
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Survival</h4>
+                <p><span class="key">C</span> Activate boost (uses methane)</p>
+                <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">Boost: +50% speed, +30% damage, invincibility</p>
+            </div>
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Other</h4>
+                <p><span class="key">R</span> Restart game</p>
+                <p id="saveHint" style="color: #aaa; font-size: 0.85em; margin-top: 5px; display: none;">
+                    💡 Hidden sequence unlocked! Press <span class="key">V</span> to revert to 2 levels back.
+                </p>
+            </div>
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #4fc3f7;">
+                <button onclick="game.showTutorial();" style="background: #9c27b0; color: #fff; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(156, 39, 176, 0.3);">
+                    📚 Tutorial & Guide
+                </button>
+                <button onclick="game.toggleSettings();" style="background: #4fc3f7; color: #000; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; margin-bottom: 10px;">
+                    ⚙️ Settings
+                </button>
+                <button onclick="game.toggleStore();" style="background: #ffb300; color: #000; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(255, 179, 0, 0.3);">
+                    🛒 Store (Unlocks)
+                </button>
+                <button id="loadSaveBtn" onclick="game.revertToSavedState();" style="background: #9c27b0; color: #fff; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; opacity: 0.5; cursor: not-allowed; display: none;" disabled>
+                    💾 Load Last Save (V) - Locked
+                </button>
+            </div>
+            <p style="margin-top: 15px; font-size: 0.85em; color: #aaa; font-style: italic;">You've been shrunk to atomic scale! Destroy molecules, collect atomic materials, and escape the scientist's brain!</p>
+        </div>
+
+        <div id="score" style="position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 1001; background: rgba(0, 0, 0, 0.9); padding: 15px 30px; border-radius: 10px; border: 2px solid #4fc3f7; backdrop-filter: blur(10px); pointer-events: none;">
+            <h3 style="color: #4fc3f7; font-size: 1.2em; margin: 0 0 10px 0;">Score: <span id="scoreValue">0</span> | Hits: <span id="hitsValue">0</span> | Misses: <span id="missesValue">0</span></h3>
+            <div style="font-size: 0.9em; color: #4fc3f7;">
+                Top Score: <span id="topScoreDisplay">0</span> | Top Level: <span id="topLevelDisplay">1</span>
+            </div>
+        </div>
+
+        <!-- Crafting UI -->
+        <div id="craftingUI">
+            <h2 style="color: #4fc3f7; margin-bottom: 20px;">Crafting Station</h2>
+            <p style="color: #aaa; margin-bottom: 20px;" id="craftingInstructions">Available only during level-up</p>
+            <div class="craft-section"><h3>Weapons</h3><div id="weaponsList"></div></div>
+            <div class="craft-section"><h3>Weapon Upgrades</h3><div id="weaponUpgradesList"></div></div>
+            <div class="craft-section"><h3>Ships</h3><div id="shipsList"></div></div>
+            <div class="craft-section"><h3>Shields</h3><div id="shieldsList"></div></div>
+            <div class="craft-section"><h3>Upgrades</h3><div id="craftingUpgradesList"></div></div>
+            <div class="craft-section"><h3>Consumables</h3><div id="craftingConsumablesList"></div></div>
+            <div class="craft-section"><h3>Tools</h3><div id="craftingToolsList"></div></div>
+            <div class="craft-section"><div id="repairList"></div></div>
+        </div>
+
+        <!-- Shop UI (level-up stat upgrades only) -->
+        <div id="shopUI">
+            <h2 id="shopTitle" style="color: #4fc3f7; margin-bottom: 20px;">Upgrade Shop</h2>
+            <p style="color: #aaa; margin-bottom: 20px;" id="shopInstructions">Available only during level-up</p>
+            <p style="color: #4fc3f7; font-size: 1.2em; margin-bottom: 10px;">Tokens: <span id="tokenDisplay">0</span></p>
+            <div class="shop-section">
+                <h3>Stat Upgrades</h3>
+                <div id="upgradesList"></div>
+            </div>
+        </div>
+
+        <!-- Store UI (neurokeys unlocks: skins/backgrounds) -->
+        <div id="storeUI">
+            <h2 style="color: #4fc3f7; margin-bottom: 20px;">Store</h2>
+            <p style="color: #aaa; margin-bottom: 20px;">Press ESC to close</p>
+            <p style="color: #ffd54f; font-size: 1.1em; margin-bottom: 20px;">Neurokeys: <span id="neurokeyDisplay">0</span></p>
+            <div class="shop-section">
+                <h3>Skins & Backgrounds</h3>
+                <div id="skinList"></div>
+            </div>
+        </div>
+
+        <!-- Inventory UI -->
+        <div id="inventoryUI">
+            <h2 style="color: #4fc3f7; margin-bottom: 20px;">Inventory</h2>
+            <div class="craft-section">
+                <h3>Weapons</h3>
+                <div id="inventoryWeaponsList"></div>
+            </div>
+            <div class="craft-section">
+                <h3>Ships</h3>
+                <div id="inventoryShipsList"></div>
+            </div>
+            <div class="craft-section">
+                <h3>Shields</h3>
+                <div id="inventoryShieldsList"></div>
+            </div>
+            <div class="craft-section">
+                <h3>Upgrades</h3>
+                <div id="inventoryUpgradesList"></div>
+            </div>
+            <div class="craft-section">
+                <h3>Consumables</h3>
+                <div id="inventoryConsumablesList"></div>
+            </div>
+        </div>
+
+        <!-- Leaderboard UI -->
+        <div id="leaderboardUI">
+            <h2 style="color: #4fc3f7; margin-bottom: 20px;">Leaderboard</h2>
+            <input id="playerNameInput" type="text" placeholder="Enter your name for the leaderboard">
+            <div id="leaderboardList"></div>
+        </div>
+
+        <!-- Settings UI (copied from main) -->
+        <div id="settingsUI">
+            <h2 style="color: #4fc3f7; margin-bottom: 20px;">Settings</h2>
+            <p style="color: #aaa; margin-bottom: 20px;">Press ESC to close</p>
+            
+            <div class="shop-section">
+                <h3>Audio Settings</h3>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                        Master Volume: <span id="masterVolumeValue">70</span>%
+                    </label>
+                    <input type="range" id="masterVolumeSlider" min="0" max="100" value="70" step="5" 
+                           style="width: 100%; margin-bottom: 10px;"
+                           oninput="game.audio.setVolume('master', this.value / 100); document.getElementById('masterVolumeValue').textContent = this.value;">
+                </div>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                        Music Volume: <span id="musicVolumeValue">60</span>%
+                    </label>
+                    <input type="range" id="musicVolumeSlider" min="0" max="100" value="60" step="5" 
+                           style="width: 100%; margin-bottom: 10px;"
+                           oninput="game.audio.setVolume('music', this.value / 100); document.getElementById('musicVolumeValue').textContent = this.value;">
+                </div>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                        Sound Effects Volume: <span id="sfxVolumeValue">80</span>%
+                    </label>
+                    <input type="range" id="sfxVolumeSlider" min="0" max="100" value="80" step="5" 
+                           style="width: 100%; margin-bottom: 10px;"
+                           oninput="game.audio.setVolume('sfx', this.value / 100); document.getElementById('sfxVolumeValue').textContent = this.value;">
+                </div>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                        Voice Volume: <span id="voiceVolumeValue">70</span>%
+                    </label>
+                    <input type="range" id="voiceVolumeSlider" min="0" max="100" value="70" step="5" 
+                           style="width: 100%; margin-bottom: 10px;"
+                           oninput="game.audio.setVolume('voice', this.value / 100); document.getElementById('voiceVolumeValue').textContent = this.value;">
+                </div>
+            </div>
+            
+            <div class="shop-section">
+                <h3>Gamepad Controls</h3>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                        Cursor Sensitivity: <span id="sensitivityValue">600</span>
+                    </label>
+                    <input type="range" id="sensitivitySlider" min="100" max="2000" value="600" step="50" 
+                           style="width: 100%; margin-bottom: 10px;"
+                           oninput="game.updateSetting('gamepadSensitivity', parseInt(this.value)); document.getElementById('sensitivityValue').textContent = this.value;">
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Adjust how fast the cursor moves with the right joystick (100 = slow, 2000 = very fast)
+                    </p>
+                </div>
+            </div>
+            
+            <div class="shop-section">
+                <h3>Display</h3>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="fullscreenToggle" 
+                               onchange="game.toggleFullscreen();"
+                               style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                        Fullscreen Mode
+                    </label>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px; margin-left: 30px;">
+                        Toggle fullscreen mode (F11). ESC will not exit fullscreen when force-fullscreen is on.
+                    </p>
+                </div>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                        Player Name
+                    </label>
+                    <input id="playerNameInput" type="text"
+                           onchange="game.updateSetting('playerName', this.value);"
+                           placeholder="Enter name for leaderboard"
+                           style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 200px;">
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Used for the leaderboard. Saved locally.
+                    </p>
+                </div>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                        FPS Cap
+                    </label>
+                    <select id="fpsCapSelect" onchange="game.updateSetting('fpsCap', this.value === 'unlimited' ? 'unlimited' : (this.value === 'vsync' ? 'vsync' : parseInt(this.value)));"
+                            style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 180px;">
+                        <option value="unlimited">Unlimited</option>
+                        <option value="30">30 FPS</option>
+                        <option value="60">60 FPS</option>
+                        <option value="90">90 FPS</option>
+                        <option value="120">120 FPS</option>
+                        <option value="239">239 FPS</option>
+                        <option value="vsync">V-Sync (match display)</option>
+                    </select>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Limit frame rate to reduce CPU/GPU use on lower-end systems.
+                    </p>
+                </div>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="backgroundToggle"
+                               onchange="game.updateSetting('backgroundEnabled', this.checked);"
+                               style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                        Background Effects
+                    </label>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px; margin-left: 30px;">
+                        Toggle backgrounds/grids; disable for better performance on older systems.
+                    </p>
+                </div>
+            </div>
+            
+            <div class="shop-section">
+                <h3>Visual Effects</h3>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="particlesToggle" checked 
+                               onchange="game.updateSetting('showParticles', this.checked);"
+                               style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                        Show Particle Effects
+                    </label>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px; margin-left: 30px;">
+                        Enable visual particle effects for explosions and impacts
+                    </p>
+                </div>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                        Particle Quality
+                    </label>
+                    <select id="particlesQualitySelect" onchange="game.updateSetting('particlesQuality', this.value);"
+                            style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 180px;">
+                        <option value="high">High</option>
+                        <option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                        <option value="off">Off</option>
+                    </select>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Lower quality reduces particle count and glow for better performance.
+                    </p>
+                </div>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                        Pair Effects Quality
+                    </label>
+                    <select id="pairEffectsQualitySelect" onchange="game.updateSetting('pairEffectsQuality', this.value);"
+                            style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 180px;">
+                        <option value="high">High</option>
+                        <option value="low">Low</option>
+                        <option value="off">Off</option>
+                    </select>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Lower quality simplifies Bell pair bonds and endpoints.
+                    </p>
+                </div>
+                <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
+                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                        Graphics Preset
+                    </label>
+                    <select id="graphicsPresetSelect" onchange="game.updateSetting('graphicsPreset', this.value);"
+                            style="padding: 8px 10px; border-radius: 6px; border: 1px solid #4fc3f7; background: #0f152c; color: #fff; width: 180px;">
+                        <option value="custom">Custom</option>
+                        <option value="ultra">Ultra</option>
+                        <option value="high">High</option>
+                        <option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                        <option value="minimal">Minimal</option>
+                    </select>
+                    <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
+                        Presets adjust multiple visual settings at once.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Weapon Wheel UI -->
+        <div id="weaponWheelUI">
+            <div class="weapon-wheel-container" id="weaponWheelContainer">
+                <div class="weapon-wheel-center">WEAPONS</div>
+            </div>
+        </div>
+
+        <!-- Repair Selection UI -->
+        <div id="repairSelectionUI">
+            <h3>Select Item to Repair (Q + Mouse Wheel)</h3>
+            <div id="repairSelectionList"></div>
+        </div>
+
+        <!-- Level Up Continue Button -->
+        <div id="levelUpContinueUI" style="display: none;">
+            <button onclick="game.continueFromLevelUp();" style="background: #4caf50; color: white; border: none; padding: 15px 40px; font-size: 1.3em; border-radius: 8px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4); transition: all 0.3s;">
+                Continue to Next Level
+            </button>
+        </div>
     </div>
     
     <!-- Cutscene Overlay -->
@@ -1990,18 +2390,6 @@
         </div>
     </div>
 
-    <!-- Shop UI -->
-    <div id="shopUI">
-        <h2 style="color: #4fc3f7; margin-bottom: 20px;">Upgrade Shop</h2>
-        <p style="color: #aaa; margin-bottom: 20px;" id="shopInstructions">Available only during level-up</p>
-        <p style="color: #4fc3f7; font-size: 1.2em; margin-bottom: 20px;">Tokens: <span id="tokenDisplay">0</span></p>
-        
-        <div class="shop-section">
-            <h3>Stat Upgrades</h3>
-            <div id="upgradesList"></div>
-        </div>
-    </div>
-    
     <!-- Level Up Continue Button (Bottom UI) -->
     <div id="levelUpContinueUI" style="display: none;">
         <button onclick="game.continueFromLevelUp();" style="background: #4caf50; color: white; border: none; padding: 15px 40px; font-size: 1.3em; border-radius: 8px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4); transition: all 0.3s;">

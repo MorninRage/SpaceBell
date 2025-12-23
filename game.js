@@ -22292,9 +22292,10 @@ class SpaceShooterGame {
         let renderingQuality = this.adaptiveQuality || 'ultra';
 
         // Burst and density overrides (tuned to keep enhanced bullets for rapid/spread at low counts).
-        const isBurst = bulletCount >= 90 || (bulletCount >= 70 && effectiveFireRateMultiplier >= 3.2);
-        const isHeavy = bulletCount >= 70 || (bulletCount >= 50 && effectiveFireRateMultiplier >= 2.5);
-        const isElevated = bulletCount >= 45 || (bulletCount >= 35 && effectiveFireRateMultiplier >= 2.0);
+        // Thresholds doubled to keep enhanced visuals longer before downgrading.
+        const isBurst = bulletCount >= 180 || (bulletCount >= 140 && effectiveFireRateMultiplier >= 6.4);
+        const isHeavy = bulletCount >= 140 || (bulletCount >= 100 && effectiveFireRateMultiplier >= 5.0);
+        const isElevated = bulletCount >= 90 || (bulletCount >= 70 && effectiveFireRateMultiplier >= 4.0);
 
         // Only lock when counts are truly high; otherwise keep full effects for rapid/spread.
         if (isBurst) {
@@ -41807,7 +41808,14 @@ class SpaceShooterGame {
         }
         
         // Start the selected cutscene
-        if (cutsceneId === 'opening') {
+        if (cutsceneId === 'intro') {
+            this.cutsceneId = 'intro';
+            this.cutscenePhase = 0;
+            this.cutsceneTime = 0;
+            this.gameState = 'cutscene';
+            console.log(`[DEV] Starting intro cutscene, gameState: ${this.gameState}, cutsceneId: ${this.cutsceneId}`);
+            this.startCutscene();
+        } else if (cutsceneId === 'opening') {
             this.cutsceneId = 'opening';
             this.cutscenePhase = 0;
             this.cutsceneTime = 0;

@@ -25697,6 +25697,8 @@ class SpaceShooterGame {
         
         // Show overlay
         this.cutsceneOverlay.classList.add('active');
+        this.cutsceneOverlay.style.display = 'block';
+        this.cutsceneCanvas.style.display = 'block';
         console.log('[Cutscene] Overlay active class added');
         
         // Resize canvas
@@ -25786,6 +25788,10 @@ class SpaceShooterGame {
         // Hide overlay
         if (this.cutsceneOverlay) {
             this.cutsceneOverlay.classList.remove('active');
+            this.cutsceneOverlay.style.display = 'none';
+        }
+        if (this.cutsceneCanvas) {
+            this.cutsceneCanvas.style.display = 'none';
         }
         
         // Clear text
@@ -25841,6 +25847,15 @@ class SpaceShooterGame {
             this.gameState = 'playing';
             this.levelUpState = false;
             this.awaitingOpeningCutscene = false;
+            // Avoid a huge delta on first frame after a long cutscene
+            this.lastTime = performance.now();
+            this.resumeSmoothing.active = true;
+            this.resumeSmoothing.framesRemaining = 3;
+            this.resumeSmoothing.targetDeltaTime = 0.016;
+            // If this was the opening/Bell cutscene, make sure gameplay ticks resume cleanly
+            if (currentCutsceneId === 'opening') {
+                this.resumeAfterOpeningCutscene();
+            }
             // Start main music if not already playing
             if (!wasManual) {
                 console.log('[Game] Cutscene ended, starting main music');
@@ -25850,7 +25865,32 @@ class SpaceShooterGame {
         }
     }
     
+    resumeAfterOpeningCutscene() {
+        // Ensure the game is unpaused and ticking after the Bell/opening cutscene
+        this.isPaused = false;
+        this.gameState = 'playing';
+        this.levelUpState = false;
+        this.awaitingOpeningCutscene = false;
+        // Prime timers to avoid huge deltas and to allow immediate spawns
+        this.lastTime = performance.now();
+        this.lastTargetSpawn = 0;
+        this.lastObstacleSpawn = 0;
+        this.lastEnemySpawn = Date.now();
+        this._statsNeedsUpdate = true;
+        // Clear any cutscene overlays just in case
+        if (this.cutsceneOverlay) {
+            this.cutsceneOverlay.classList.remove('active');
+            this.cutsceneOverlay.style.display = 'none';
+        }
+        if (this.cutsceneCanvas) {
+            this.cutsceneCanvas.style.display = 'none';
+        }
+    }
+    
     // Name input prompt disabled (was showNameInputDelayed)
+    showNameInputDelayed() {
+        // Name prompt disabled; keep as no-op to avoid runtime errors when called after cutscenes
+    }
     
     updateCutscene(deltaTime) {
         if (this.gameState !== 'cutscene') {

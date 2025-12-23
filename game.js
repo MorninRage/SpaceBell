@@ -51,7 +51,7 @@ class AudioManager {
         // Sound effects mapping
         this.sfxFiles = {
             // Combat
-            shoot: 'sfx/shoot.ogg',
+            shoot: 'sfx/zap.wav',
             laser: 'sfx/laser.ogg',
             hit: 'sfx/hit.ogg',
             explosion: 'sfx/explosion.ogg',

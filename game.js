@@ -1072,6 +1072,12 @@ class SpaceShooterGame {
         this.particles = [];
         this.bossSpawned = false; // Track if level 150 boss has spawned
         
+        // Resource controls to avoid late-game overload
+        this.maxItemsOnScreen = 120; // Hard cap for visual resource items
+        this.resourceDropMultiplierCap = 6; // Upper bound on stacked drop multipliers
+        this.maxMaterialDropBonus = 2.0; // +200% cap from materialDropRate
+        this.resourceQualityThresholds = { medium: 100, low: 160, minimal: 220 };
+        
         // Stats
         this.score = 0;
         this.hits = 0;
@@ -5121,8 +5127,58 @@ class SpaceShooterGame {
         this.updateInventoryUI();
     }
     
+    getResourceDropCap(requestedCount) {
+        // Cap drops by level and current on-screen headroom to avoid overload
+        const level = this.level || 1;
+        const maxItems = this.maxItemsOnScreen || 120;
+        let levelCap = 18;
+        if (level >= 180) levelCap = 8;
+        else if (level >= 150) levelCap = 10;
+        else if (level >= 120) levelCap = 12;
+        else if (level >= 90) levelCap = 14;
+        else if (level >= 60) levelCap = 16;
+        const headroom = Math.max(0, maxItems - this.items.length);
+        const capped = Math.min(requestedCount, levelCap, headroom);
+        return Math.max(0, capped);
+    }
+    
+    clampResourceDropMultiplier(multiplier) {
+        const cap = this.resourceDropMultiplierCap || 6;
+        return Math.min(multiplier, cap);
+    }
+    
+    getResourceRenderQuality() {
+        const thresholds = this.resourceQualityThresholds || { medium: 50, low: 80, minimal: 110 };
+        const count = this.items.length;
+        const level = this.level || 1;
+        if (count >= thresholds.minimal || level >= 180) return 'minimal';
+        if (count >= thresholds.low || level >= 150) return 'low';
+        if (count >= thresholds.medium || level >= 120) return 'medium';
+        return 'high';
+    }
+    
+    getResourceBaseColor(type) {
+        // Lazy-init to avoid re-allocating per frame
+        if (!this._resourceBaseColors) {
+            this._resourceBaseColors = {
+                quantumParticles: '#ba68c8',
+                crystals: '#00bcd4',
+                energyCores: '#ff9800',
+                metalScraps: '#9e9e9e',
+                atp: '#ffeb3b',
+                simpleSugars: '#ff8a65',
+                aminoAcids: '#66bb6a',
+                fattyAcids: '#ff7043',
+                nucleotides: '#4fc3f7',
+                vitamins: '#8bc34a',
+                minerals: '#90a4ae'
+            };
+        }
+        return this._resourceBaseColors[type] || '#ffffff';
+    }
+    
     dropItem(x, y, type) {
-        // ALWAYS drop a visible material item (no random chance)
+        // Always drop a visible material item (no random chance)
         // Mode-specific material drops - encourages switching modes
         let itemType;
         const rand = Math.random();
@@ -5181,9 +5237,9 @@ class SpaceShooterGame {
         
         // Token drops - double in Bell mode, plus token drop rate bonus from upgrades
         const tokenMultiplier = this.mode === 'bell' ? 2 : 1;
-        const tokenDropBonus = 1 + (this.playerStats.tokenDropRate / 100);
+        const cappedTokenBonus = Math.min(this.maxMaterialDropBonus || 0, (this.playerStats.tokenDropRate || 0) / 100);
         const baseTokens = (1 + Math.floor(this.level / 2)) * tokenMultiplier;
-        this.inventory.tokens += Math.floor(baseTokens * tokenDropBonus);
+        this.inventory.tokens += Math.floor(baseTokens * (1 + cappedTokenBonus));
     }
 
     togglePause() {
@@ -6134,22 +6190,25 @@ class SpaceShooterGame {
                         if (enemy.health <= 0) {
                             this.audio.playSFX('enemyDestroy', 0.8);
                             this.audio.playSFX('explosion', 0.6);
-                            // Boss enemies drop more resources
-                            const dropCount = 4 + Math.floor(this.level / 3);
-                            for (let i = 0; i < dropCount; i++) {
-                                const rand = Math.random();
-                                let itemType;
-                                if (rand < 0.25) itemType = 'quantumParticles';
-                                else if (rand < 0.5) itemType = 'crystals';
-                                else if (rand < 0.75) itemType = 'energyCores';
-                                else itemType = 'metalScraps';
-                                this.dropItem(enemy.x + (Math.random() - 0.5) * 30, enemy.y + (Math.random() - 0.5) * 30, itemType);
+                            // Boss enemies drop more resources, capped to avoid overload
+                            const baseBossDrop = 4 + Math.floor(this.level / 3);
+                            const dropCount = this.getResourceDropCap(baseBossDrop);
+                            if (dropCount > 0) {
+                                for (let i = 0; i < dropCount; i++) {
+                                    const rand = Math.random();
+                                    let itemType;
+                                    if (rand < 0.25) itemType = 'quantumParticles';
+                                    else if (rand < 0.5) itemType = 'crystals';
+                                    else if (rand < 0.75) itemType = 'energyCores';
+                                    else itemType = 'metalScraps';
+                                    this.dropItem(enemy.x + (Math.random() - 0.5) * 30, enemy.y + (Math.random() - 0.5) * 30, itemType);
+                                }
                             }
-                            // Drop tokens
+                            // Award tokens directly (avoid spawning extra visual items)
                             const tokenCount = 2 + Math.floor(this.level / 5);
-                            for (let i = 0; i < tokenCount; i++) {
-                                this.dropItem(enemy.x + (Math.random() - 0.5) * 30, enemy.y + (Math.random() - 0.5) * 30, 'tokens');
-                            }
+                            const tokenMultiplier = this.mode === 'bell' ? 2 : 1;
+                            const cappedTokenBonus = Math.min(this.maxMaterialDropBonus || 0, (this.playerStats.tokenDropRate || 0) / 100);
+                            this.inventory.tokens += Math.floor(tokenCount * tokenMultiplier * (1 + cappedTokenBonus));
                             this.createExplosion(enemy.x, enemy.y);
                             
                             // Remove enemy from array immediately so puzzle parts can be damaged
@@ -6251,7 +6310,7 @@ class SpaceShooterGame {
                                 // Enemy ships drop resources (reduced drop count for balance)
                                 let dropCount = 2 + Math.floor(this.level / 3); // 2-4+ items based on level (reduced from 3-5+)
                                 
-                                // Apply upgrade bonuses to resource drops
+                                // Apply upgrade bonuses to resource drops with caps
                                 let dropMultiplier = 1.0;
                                 if (this.currentUpgrades.includes('ensembleBypass')) {
                                     dropMultiplier *= 2.0; // +100% resource drops
@@ -6259,10 +6318,13 @@ class SpaceShooterGame {
                                 if (this.currentUpgrades.includes('individualSystemAmplifier')) {
                                     dropMultiplier *= 3.0; // +200% resource drops (total)
                                 }
-                                // Apply material drop rate bonus from upgrades
-                                dropMultiplier *= (1 + (this.playerStats.materialDropRate / 100));
-                                dropCount = Math.floor(dropCount * dropMultiplier);
-                                for (let i = 0; i < dropCount; i++) {
+                                // Apply material drop rate bonus from upgrades (capped)
+                                const materialDropBonus = Math.min(this.maxMaterialDropBonus || 0, (this.playerStats.materialDropRate || 0) / 100);
+                                dropMultiplier *= (1 + materialDropBonus);
+                                dropMultiplier = this.clampResourceDropMultiplier(dropMultiplier);
+                                dropCount = this.getResourceDropCap(Math.floor(dropCount * dropMultiplier));
+                                if (dropCount > 0) {
+                                    for (let i = 0; i < dropCount; i++) {
                                     // Drop various materials
                                     const rand = Math.random();
                                     let itemType;
@@ -6291,19 +6353,20 @@ class SpaceShooterGame {
                                     const minCollectionDistance = playerRadius + itemRadius + 5;
                                     const minCollectionDistanceSquared = minCollectionDistance * minCollectionDistance;
                                     
-                                    this.items.push({
-                                        x: itemX,
-                                        y: itemY,
-                                        type: itemType,
-                                        vx: Math.cos(angle) * 100,
-                                        vy: Math.sin(angle) * 100,
-                                        lifetime: 5,
-                                        collected: false,
-                                        createdTime: this.time, // Track when item was created
-                                        size: 8, // Size for collision detection
-                                        framesSinceCreation: 0, // Track frames since creation - prevents same-frame collection
-                                        createdTooClose: distFromPlayerSquared < minCollectionDistanceSquared // Flag if created too close to player
-                                    });
+                                        this.items.push({
+                                            x: itemX,
+                                            y: itemY,
+                                            type: itemType,
+                                            vx: Math.cos(angle) * 100,
+                                            vy: Math.sin(angle) * 100,
+                                            lifetime: 5,
+                                            collected: false,
+                                            createdTime: this.time, // Track when item was created
+                                            size: 8, // Size for collision detection
+                                            framesSinceCreation: 0, // Track frames since creation - prevents same-frame collection
+                                            createdTooClose: distFromPlayerSquared < minCollectionDistanceSquared // Flag if created too close to player
+                                        });
+                                    }
                                 }
                                 
                                 // Bonus tokens for enemy ships
@@ -6580,17 +6643,21 @@ class SpaceShooterGame {
                             let baseDropCount = 8; // Increased from 5 to make food crafting more accessible
                             
                             // Apply upgrade bonuses to resource drops
+                            let dropMultiplier = obstacle.rewardMultiplier || 1.0;
                             if (this.currentUpgrades.includes('ensembleBypass')) {
-                                baseDropCount *= 2.0; // +100% resource drops
+                                dropMultiplier *= 2.0; // +100% resource drops
                             }
                             if (this.currentUpgrades.includes('individualSystemAmplifier')) {
-                                baseDropCount *= 3.0; // +200% resource drops (total)
+                                dropMultiplier *= 3.0; // +200% resource drops (total)
                             }
+                            const materialDropBonus = Math.min(this.maxMaterialDropBonus || 0, (this.playerStats.materialDropRate || 0) / 100);
+                            dropMultiplier *= (1 + materialDropBonus);
+                            dropMultiplier = this.clampResourceDropMultiplier(dropMultiplier);
                             
-                            const dropCount = Math.floor(baseDropCount * (obstacle.rewardMultiplier || 1.0));
+                            const dropCount = this.getResourceDropCap(Math.floor(baseDropCount * dropMultiplier));
                             
                             // If survival is unlocked, molecules ONLY drop food materials (no regular materials)
-                            if (this.survivalUnlocked) {
+                            if (dropCount > 0 && this.survivalUnlocked) {
                                 // All drops are biological components
                                 for (let i = 0; i < dropCount; i++) {
                                     const bioRand = Math.random();
@@ -6644,7 +6711,7 @@ class SpaceShooterGame {
                                         isBiological: true // Flag for enhanced graphics
                                     });
                                 }
-                            } else {
+                            } else if (dropCount > 0) {
                                 // Survival not unlocked - drop regular materials (old system)
                                 for (let i = 0; i < dropCount; i++) {
                                     const rand = Math.random();
@@ -6834,30 +6901,32 @@ class SpaceShooterGame {
                 }
                 const boostResourceMultiplier = 0.75; // Reduced to half (was 1.5, now 0.75)
                 // Drop materials with boost bonus
-                const dropCount = Math.floor((2 + Math.floor(this.level / 3)) * boostResourceMultiplier);
-                for (let i = 0; i < dropCount; i++) {
-                    const rand = Math.random();
-                    let itemType;
-                    if (this.mode === 'ensemble') {
-                        itemType = rand < 0.5 ? 'quantumParticles' : 'crystals';
-                    } else if (this.mode === 'individual') {
-                        itemType = rand < 0.5 ? 'energyCores' : 'metalScraps';
-                    } else {
-                        itemType = rand < 0.33 ? 'quantumParticles' : (rand < 0.66 ? 'crystals' : 'energyCores');
+                const dropCount = this.getResourceDropCap(Math.floor((2 + Math.floor(this.level / 3)) * boostResourceMultiplier));
+                if (dropCount > 0) {
+                    for (let i = 0; i < dropCount; i++) {
+                        const rand = Math.random();
+                        let itemType;
+                        if (this.mode === 'ensemble') {
+                            itemType = rand < 0.5 ? 'quantumParticles' : 'crystals';
+                        } else if (this.mode === 'individual') {
+                            itemType = rand < 0.5 ? 'energyCores' : 'metalScraps';
+                        } else {
+                            itemType = rand < 0.33 ? 'quantumParticles' : (rand < 0.66 ? 'crystals' : 'energyCores');
+                        }
+                        const angle = (Math.PI * 2 * i) / dropCount;
+                        this.items.push({
+                            x: target.x + Math.cos(angle) * 30,
+                            y: target.y + Math.sin(angle) * 30,
+                            type: itemType,
+                            vx: Math.cos(angle) * 150,
+                            vy: Math.sin(angle) * 150,
+                            lifetime: 5,
+                            collected: false,
+                            createdTime: this.time,
+                            size: 8,
+                            framesSinceCreation: 0
+                        });
                     }
-                    const angle = (Math.PI * 2 * i) / dropCount;
-                    this.items.push({
-                        x: target.x + Math.cos(angle) * 30,
-                        y: target.y + Math.sin(angle) * 30,
-                        type: itemType,
-                        vx: Math.cos(angle) * 150,
-                        vy: Math.sin(angle) * 150,
-                        lifetime: 5,
-                        collected: false,
-                        createdTime: this.time,
-                        size: 8,
-                        framesSinceCreation: 0
-                    });
                 }
                 this.score += 10 * boostResourceMultiplier;
                 this.inventory.tokens += Math.floor((1 + Math.floor(this.level / 2)) * boostResourceMultiplier);
@@ -6919,32 +6988,34 @@ class SpaceShooterGame {
                 if (hitA || hitB) {
                     const boostResourceMultiplier = 0.75; // Reduced to half (was 1.5, now 0.75)
                     // Destroy both parts of the pair EXCEPT puzzle targets
-                    const dropCount = Math.floor((4 + Math.floor(this.level / 3)) * boostResourceMultiplier);
-                    for (let i = 0; i < dropCount; i++) {
-                        const rand = Math.random();
-                        let itemType;
-                        if (this.mode === 'ensemble') {
-                            itemType = rand < 0.5 ? 'quantumParticles' : 'crystals';
-                        } else if (this.mode === 'individual') {
-                            itemType = rand < 0.5 ? 'energyCores' : 'metalScraps';
-                        } else {
-                            itemType = rand < 0.33 ? 'quantumParticles' : (rand < 0.66 ? 'crystals' : 'energyCores');
+                    const dropCount = this.getResourceDropCap(Math.floor((4 + Math.floor(this.level / 3)) * boostResourceMultiplier));
+                    if (dropCount > 0) {
+                        for (let i = 0; i < dropCount; i++) {
+                            const rand = Math.random();
+                            let itemType;
+                            if (this.mode === 'ensemble') {
+                                itemType = rand < 0.5 ? 'quantumParticles' : 'crystals';
+                            } else if (this.mode === 'individual') {
+                                itemType = rand < 0.5 ? 'energyCores' : 'metalScraps';
+                            } else {
+                                itemType = rand < 0.33 ? 'quantumParticles' : (rand < 0.66 ? 'crystals' : 'energyCores');
+                            }
+                            const angle = (Math.PI * 2 * i) / dropCount;
+                            const centerX = (pair.a.x + pair.b.x) / 2;
+                            const centerY = (pair.a.y + pair.b.y) / 2;
+                            this.items.push({
+                                x: centerX + Math.cos(angle) * 30,
+                                y: centerY + Math.sin(angle) * 30,
+                                type: itemType,
+                                vx: Math.cos(angle) * 150,
+                                vy: Math.sin(angle) * 150,
+                                lifetime: 5,
+                                collected: false,
+                                createdTime: this.time,
+                                size: 8,
+                                framesSinceCreation: 0
+                            });
                         }
-                        const angle = (Math.PI * 2 * i) / dropCount;
-                        const centerX = (pair.a.x + pair.b.x) / 2;
-                        const centerY = (pair.a.y + pair.b.y) / 2;
-                        this.items.push({
-                            x: centerX + Math.cos(angle) * 30,
-                            y: centerY + Math.sin(angle) * 30,
-                            type: itemType,
-                            vx: Math.cos(angle) * 150,
-                            vy: Math.sin(angle) * 150,
-                            lifetime: 5,
-                            collected: false,
-                            createdTime: this.time,
-                            size: 8,
-                            framesSinceCreation: 0
-                        });
                     }
                     this.score += 20 * boostResourceMultiplier;
                     this.inventory.tokens += Math.floor((2 + Math.floor(this.level / 2)) * boostResourceMultiplier);
@@ -7022,16 +7093,20 @@ class SpaceShooterGame {
                     
                     // Drop resources with boost bonus
                     let baseDropCount = 8; // Base drops for molecules
+                    let dropMultiplier = obstacle.rewardMultiplier || 1.0;
                     if (this.currentUpgrades.includes('ensembleBypass')) {
-                        baseDropCount *= 2.0;
+                        dropMultiplier *= 2.0;
                     }
                     if (this.currentUpgrades.includes('individualSystemAmplifier')) {
-                        baseDropCount *= 3.0;
+                        dropMultiplier *= 3.0;
                     }
-                    const dropCount = Math.floor(baseDropCount * (obstacle.rewardMultiplier || 1.0) * boostResourceMultiplier);
+                    const materialDropBonus = Math.min(this.maxMaterialDropBonus || 0, (this.playerStats.materialDropRate || 0) / 100);
+                    dropMultiplier *= (1 + materialDropBonus);
+                    dropMultiplier = this.clampResourceDropMultiplier(dropMultiplier * boostResourceMultiplier);
+                    const dropCount = this.getResourceDropCap(Math.floor(baseDropCount * dropMultiplier));
                     
                     // Drop biological components (survival system)
-                    if (this.survivalUnlocked) {
+                    if (dropCount > 0 && this.survivalUnlocked) {
                         for (let i = 0; i < dropCount; i++) {
                             const bioRand = Math.random();
                             let bioType;
@@ -7058,6 +7133,57 @@ class SpaceShooterGame {
                                 size: 8,
                                 framesSinceCreation: 0,
                                 isBiological: true
+                            });
+                        }
+                    }
+                    else if (dropCount > 0) {
+                        for (let i = 0; i < dropCount; i++) {
+                            const rand = Math.random();
+                            let itemType;
+                            if (this.mode === 'ensemble') {
+                                if (rand < 0.4) {
+                                    itemType = 'quantumParticles';
+                                } else if (rand < 0.65) {
+                                    itemType = 'crystals';
+                                } else if (rand < 0.85) {
+                                    itemType = 'metalScraps';
+                                } else {
+                                    itemType = 'energyCores';
+                                }
+                            } else if (this.mode === 'individual') {
+                                if (rand < 0.5) {
+                                    itemType = 'energyCores';
+                                } else {
+                                    itemType = 'metalScraps';
+                                }
+                            } else if (this.mode === 'bell') {
+                                if (rand < 0.4) {
+                                    itemType = 'quantumParticles';
+                                } else if (rand < 0.65) {
+                                    itemType = 'crystals';
+                                } else if (rand < 0.85) {
+                                    itemType = 'metalScraps';
+                                } else {
+                                    itemType = 'energyCores';
+                                }
+                            }
+                            
+                            const angle = (Math.PI * 2 * i) / dropCount;
+                            const offset = 40;
+                            const itemX = obstacle.x + Math.cos(angle) * offset;
+                            const itemY = obstacle.y + Math.sin(angle) * offset;
+                            
+                            this.items.push({
+                                x: itemX,
+                                y: itemY,
+                                type: itemType,
+                                vx: Math.cos(angle) * 150,
+                                vy: Math.sin(angle) * 150,
+                                lifetime: 5,
+                                collected: false,
+                                createdTime: this.time,
+                                size: 8,
+                                framesSinceCreation: 0
                             });
                         }
                     }
@@ -7347,7 +7473,7 @@ class SpaceShooterGame {
             if (this.boostActive && this.checkCollision(p, this.player)) {
                 const boostResourceMultiplier = 0.75; // Reduced to half (was 1.5, now 0.75)
                 // Drop materials with boost bonus
-                const dropCount = Math.floor((1 + Math.floor(this.level / 5)) * boostResourceMultiplier);
+                const dropCount = this.getResourceDropCap(Math.floor((1 + Math.floor(this.level / 5)) * boostResourceMultiplier));
                 for (let j = 0; j < dropCount; j++) {
                     const rand = Math.random();
                     let itemType;
@@ -7420,7 +7546,7 @@ class SpaceShooterGame {
                 if (this.boostActive && this.checkCollision(enemy, this.player)) {
                     const boostResourceMultiplier = 0.75; // Reduced to half (was 1.5, now 0.75)
                     // Drop resources with boost bonus
-                    const dropCount = Math.floor((2 + Math.floor(this.level / 3)) * boostResourceMultiplier);
+                    const dropCount = this.getResourceDropCap(Math.floor((2 + Math.floor(this.level / 3)) * boostResourceMultiplier));
                     for (let i = 0; i < dropCount; i++) {
                         const rand = Math.random();
                         let itemType;
@@ -20402,14 +20528,23 @@ class SpaceShooterGame {
     drawItems() {
         const hasAutoCollector = this.currentUpgrades.includes('autoCollector');
         const time = this.time || 0;
+        const resourceQuality = this.getResourceRenderQuality();
+        const allowCollectorEffects = hasAutoCollector && resourceQuality === 'high';
+        const screenMargin = 32;
         
         this.items.forEach(item => {
+            // Skip drawing off-screen items (saves work when many drops exist)
+            if (item.x < -screenMargin || item.x > this.canvas.width + screenMargin ||
+                item.y < -screenMargin || item.y > this.canvas.height + screenMargin) {
+                return;
+            }
+            
             const itemSize = item.size || 8;
             const pulseIntensity = 0.7 + Math.sin(time * 2 + item.x * 0.1) * 0.3;
             
             // Draw attraction line to player if auto-collector is active
             // OPTIMIZED: Use solid colors, limit particles, only show for closer items
-            if (hasAutoCollector) {
+            if (allowCollectorEffects) {
                 const dx = this.player.x - item.x;
                 const dy = this.player.y - item.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
@@ -20451,6 +20586,21 @@ class SpaceShooterGame {
                         this.ctx.shadowBlur = 0;
                     }
                 }
+            }
+            
+            // Low/medium quality: simple solid circles, no gradients/shadows
+            if (resourceQuality !== 'high') {
+                const color = this.getResourceBaseColor(item.type);
+                this.ctx.fillStyle = color;
+                this.ctx.beginPath();
+                this.ctx.arc(item.x, item.y, itemSize, 0, Math.PI * 2);
+                this.ctx.fill();
+                if (resourceQuality === 'medium') {
+                    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                    this.ctx.lineWidth = 1;
+                    this.ctx.stroke();
+                }
+                return;
             }
             
             this.ctx.save();
@@ -22030,7 +22180,7 @@ class SpaceShooterGame {
                         } else if (isObstacle) {
                             // Handle obstacle/molecule destruction (reduced drop count for balance)
                             const baseDropCount = entity.isBoss ? 20 : 5; // Reduced from 9 to 5 for regular obstacles
-                            const dropCount = Math.floor(baseDropCount * (entity.rewardMultiplier || 1.0));
+                            const dropCount = this.getResourceDropCap(Math.floor(baseDropCount * (entity.rewardMultiplier || 1.0)));
                             for (let i = 0; i < dropCount; i++) {
                                 // Drop items (similar to bullet collision)
                                 const rand = Math.random();
@@ -22086,7 +22236,7 @@ class SpaceShooterGame {
                             }
                         } else if (isEnemyShip) {
                             // Handle enemy ship destruction
-                            const dropCount = 3 + Math.floor(this.level / 2);
+                            const dropCount = this.getResourceDropCap(3 + Math.floor(this.level / 2));
                             for (let i = 0; i < dropCount; i++) {
                                 const rand = Math.random();
                                 let itemType;

@@ -49,3 +49,4 @@
 - Prefer profiling before visual feature additions; follow the new quality-tier patterns for any rendering-heavy features.
 
 
+

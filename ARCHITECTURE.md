@@ -55,6 +55,7 @@
 - Bullet gradients/shadows/particles are the primary render cost; mitigated via quality tiers and culling.
 - Background gradient creation still happens per-frame in boss scenes; keep counts low when adding effects.
 - Ensure browser GPU acceleration is enabled; service worker caching reduces network overhead when hosted.
+- Early-level pacing: levels 1-15 spawn particles faster and molecules slower with a 10-obstacle cap to keep the opening minutes smooth while still feeding materials.
 - Resource drops now have caps and rendering tiers to prevent late-game overload:
   - `getResourceDropCap()` limits drop counts by level and on-screen headroom; multipliers are clamped.
   - `getResourceRenderQuality()` downgrades item visuals (solid circles only in low/minimal modes) and skips auto-collector effects when many items are present. Current thresholds: medium 100, low 160, minimal 220 items (counts or high levels).

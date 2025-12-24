@@ -1072,6 +1072,9 @@ class SpaceShooterGame {
         this.particles = [];
         this.bossSpawned = false; // Track if level 150 boss has spawned
         
+        // Per-level timer (does not advance during cutscenes/menus/boss mode)
+        this.levelTimeElapsed = 0;
+        
         // Resource controls to avoid late-game overload
         this.maxItemsOnScreen = 120; // Hard cap for visual resource items
         this.resourceDropMultiplierCap = 6; // Upper bound on stacked drop multipliers
@@ -1087,10 +1090,11 @@ class SpaceShooterGame {
         this.lastObstacleSpawn = 0;
         this.lastEnemySpawn = Date.now(); // Initialize to current time so first spawn waits 8 seconds
         this.lastEnemyShot = 0;
-        this.targetSpawnRate = 2000;
-        this.obstacleSpawnRate = 3000;
+        this.targetSpawnRate = this.getTargetSpawnRateForLevel();
+        this.obstacleSpawnRate = this.getObstacleSpawnRateForLevel();
         // Performance caps to reduce late-game lag
-        this.maxObstacleCapEarly = 18;   // levels < 50
+        this.maxObstacleCapIntro = 10;   // levels <= 15 (lighter early load)
+        this.maxObstacleCapEarly = 14;   // levels < 50
         this.maxObstacleCapMid = 14;     // levels 50-100
         this.maxObstacleCapLate = 12;    // levels 100+
         this.maxPairsCap = 10;           // cap correlated pairs/puzzle partners
@@ -2214,10 +2218,7 @@ class SpaceShooterGame {
         // After boss is defeated, trigger level-up menu
         // The level was frozen during boss battle, so now we can show the level-up menu
         // Reset level time anchor to prevent accumulated time from instantly advancing multiple levels
-        const baseTimePerLevel = 30;
-        const timeReduction = Math.min(40, Math.max(0, this.playerStats.levelTimeReduction)) / 100; // Clamp between 0-40%
-        const adjustedTimePerLevel = Math.max(10, baseTimePerLevel * (1 - timeReduction));
-        this.time = (this.level - 1) * adjustedTimePerLevel;
+        this.levelTimeElapsed = 0;
         
         this.levelUpState = true;
         this.gameState = 'levelup';
@@ -3561,6 +3562,39 @@ class SpaceShooterGame {
         return damagePerShot;
     }
     
+    getTimeReductionFactor() {
+        // Defensive: legacy saves might not have the stat; coerce to number and clamp
+        const raw = Number(this.playerStats?.levelTimeReduction ?? 0);
+        const clamped = Math.min(40, Math.max(0, isFinite(raw) ? raw : 0));
+        return clamped / 100;
+    }
+    
+    getAdjustedTimePerLevel() {
+        const baseTimePerLevel = 30;
+        const timeReduction = this.getTimeReductionFactor();
+        return Math.max(10, baseTimePerLevel * (1 - timeReduction)); // Minimum 10s to avoid zero/negative
+    }
+    
+    getTargetSpawnRateForLevel(level = this.level) {
+        if (level <= 5) {
+            return 2200 - (level - 1) * 180; // 2200 → 1480ms
+        }
+        if (level <= 15) {
+            return Math.max(900, 1500 - (level - 6) * 60); // 1500 → 960ms
+        }
+        return Math.max(500, 2000 - level * 100);
+    }
+    
+    getObstacleSpawnRateForLevel(level = this.level) {
+        if (level <= 5) {
+            return 3200 - (level - 1) * 200; // 3200 → 2400ms
+        }
+        if (level <= 15) {
+            return Math.max(1400, 2400 - (level - 6) * 110); // 2400 → ~1410ms
+        }
+        return Math.max(1000, 3000 - level * 150);
+    }
+    
     spawnObstacle() {
         if (!this.canvas || this.canvas.width === 0) return;
         
@@ -3746,6 +3780,7 @@ class SpaceShooterGame {
     }
     
     getMaxObstacles() {
+        if (this.level <= 15) return this.maxObstacleCapIntro;
         if (this.level < 50) return this.maxObstacleCapEarly;
         if (this.level < 100) return this.maxObstacleCapMid;
         return this.maxObstacleCapLate;
@@ -3897,8 +3932,8 @@ class SpaceShooterGame {
         this.lastObstacleSpawn = 0;
         this.lastEnemySpawn = Date.now(); // Initialize to current time so first spawn waits
         this.lastEnemyShot = 0;
-        this.targetSpawnRate = 2000;
-        this.obstacleSpawnRate = 3000;
+        this.targetSpawnRate = this.getTargetSpawnRateForLevel();
+        this.obstacleSpawnRate = this.getObstacleSpawnRateForLevel();
         this.enemySpawnRate = 8000; // Spawn enemy every 8 seconds in Bell mode (more time between spawns)
         this.enemyShotRate = 1500; // Enemy shoots every 1.5 seconds
         
@@ -4345,9 +4380,7 @@ class SpaceShooterGame {
         // Calculate time based on level and levelTimeReduction
         // Level formula: level = Math.floor(time / adjustedTimePerLevel) + 1
         // So: time = (level - 1) * adjustedTimePerLevel
-        const baseTimePerLevel = 30;
-        const timeReduction = Math.min(40, Math.max(0, this.playerStats.levelTimeReduction)) / 100; // Clamp between 0-40% to prevent negative values
-        const adjustedTimePerLevel = Math.max(10, baseTimePerLevel * (1 - timeReduction)); // Minimum 10 seconds per level to prevent negative/zero values
+        const adjustedTimePerLevel = this.getAdjustedTimePerLevel();
         
         // Use saved time if available and valid, otherwise calculate from level
         // Time should be (level - 1) * adjustedTimePerLevel to match the level calculation
@@ -4401,18 +4434,9 @@ class SpaceShooterGame {
         this.items = [];
         this.particles = [];
         
-        // Reset spawn timers
-        // Adjusted spawn rates for better balance, especially levels 1-5
-        if (this.level <= 5) {
-            // Slower target spawning: 3-3.5 seconds (was 1.5-2 seconds)
-            // Faster obstacle spawning: 2-2.5 seconds (was 2.25-3 seconds)
-            this.targetSpawnRate = 3500 - (this.level - 1) * 100; // Level 1: 3500ms, Level 5: 3100ms
-            this.obstacleSpawnRate = 2500 - (this.level - 1) * 100; // Level 1: 2500ms, Level 5: 2100ms
-        } else {
-            // Normal scaling for levels 6+
-            this.targetSpawnRate = Math.max(500, 2000 - this.level * 100);
-            this.obstacleSpawnRate = Math.max(1000, 3000 - this.level * 150);
-        }
+        // Reset spawn timers with early-level gating (fewer molecules, more particles through level 15)
+        this.targetSpawnRate = this.getTargetSpawnRateForLevel();
+        this.obstacleSpawnRate = this.getObstacleSpawnRateForLevel();
         this.lastTargetSpawn = 0;
         this.lastObstacleSpawn = 0;
         this.lastEnemySpawn = Date.now();
@@ -5840,31 +5864,28 @@ class SpaceShooterGame {
         // Level progression (prevent level progression during boss battles and cutscenes)
         // Note: Cutscenes already return early, but double-check here for safety
         if (!this.bossMode && this.gameState === 'playing') {
+            // Advance per-level timer only when actively playing and not in boss mode
+            this.levelTimeElapsed += deltaTime;
+            
             // Apply level time reduction from upgrades (reduces the 30 seconds needed per level)
-            const baseTimePerLevel = 30;
-            const timeReduction = Math.min(40, Math.max(0, this.playerStats.levelTimeReduction)) / 100; // Clamp between 0-40% to prevent negative values
-            const adjustedTimePerLevel = Math.max(10, baseTimePerLevel * (1 - timeReduction)); // Minimum 10 seconds per level to prevent negative/zero values
-            const newLevel = Math.floor(this.time / adjustedTimePerLevel) + 1;
-            if (newLevel > this.level) {
+            let adjustedTimePerLevel = this.getAdjustedTimePerLevel();
+            if (!Number.isFinite(adjustedTimePerLevel) || adjustedTimePerLevel <= 0) {
+                console.warn('[Level] adjustedTimePerLevel invalid, resetting time reduction and using base 30s');
+                this.playerStats.levelTimeReduction = 0;
+                adjustedTimePerLevel = 30;
+            }
+            // Level up for each full interval elapsed; carry over remainder
+            while (this.levelTimeElapsed >= adjustedTimePerLevel) {
                 const oldLevel = this.level;
-                // Advance only one level at a time to avoid multi-level skips
-                this.level = this.level + 1;
-                // Consume time for the completed level so we don't chain level-ups
-                this.time = (this.level - 1) * adjustedTimePerLevel;
-                
-                // Adjusted spawn rates for better balance, especially levels 1-5
-                // Levels 1-5: Slower target spawn (more time between particles), faster obstacle spawn (more molecules)
-                // This ensures players can reach molecules for food crafting
-                if (this.level <= 5) {
-                    // Slower target spawning: 3-3.5 seconds (was 1.5-2 seconds)
-                    // Faster obstacle spawning: 2-2.5 seconds (was 2.25-3 seconds)
-                    this.targetSpawnRate = 3500 - (this.level - 1) * 100; // Level 1: 3500ms, Level 5: 3100ms
-                    this.obstacleSpawnRate = 2500 - (this.level - 1) * 100; // Level 1: 2500ms, Level 5: 2100ms
-                } else {
-                    // Normal scaling for levels 6+
-                    this.targetSpawnRate = Math.max(500, 2000 - this.level * 100);
-                    this.obstacleSpawnRate = Math.max(1000, 3000 - this.level * 150);
+                this.levelTimeElapsed -= adjustedTimePerLevel;
+                if (!Number.isFinite(this.levelTimeElapsed) || this.levelTimeElapsed < 0) {
+                    this.levelTimeElapsed = 0;
                 }
+                this.level += 1;
+                
+                // Adjust spawn rates when leveling (lighter molecules + more particles through level 15)
+                this.targetSpawnRate = this.getTargetSpawnRateForLevel();
+                this.obstacleSpawnRate = this.getObstacleSpawnRateForLevel();
                 
                 // Check if this is a boss level (every 15 levels: 15, 30, 45, 60, etc.)
                 const isBossLevel = this.level % 15 === 0;
@@ -7076,7 +7097,7 @@ class SpaceShooterGame {
                     const healthPercent = obstacle.health / obstacle.maxHealth;
                     // OPTIMIZATION: Only update size if it changed significantly (reduces unnecessary updates)
                     const newSize = obstacle.originalSize * healthPercent;
-                    if (Math.abs(obstacle.size - newSize) > 0.1) {
+                    if (Math.abs(obstacle.size - newSize) > 0.2) {
                         obstacle.size = newSize;
                     }
                 }
@@ -9930,9 +9951,14 @@ class SpaceShooterGame {
                 }
                 break;
             case 'levelTimeReduction':
-                this.playerStats.levelTimeReduction = Math.min(40, this.playerStats.levelTimeReduction + 3); // +3% time reduction, cap at 40% (18s minimum per level)
-                this.upgradeLevels.levelTimeReduction++;
-                console.log(`Level Time Reduction upgraded! New reduction: ${this.playerStats.levelTimeReduction}%${this.playerStats.levelTimeReduction >= 40 ? ' (MAXED)' : ''}`);
+                if (this.playerStats.levelTimeReduction < 40) {
+                    this.playerStats.levelTimeReduction = Math.min(40, this.playerStats.levelTimeReduction + 3); // +3% time reduction, cap at 40% (18s minimum per level)
+                    this.upgradeLevels.levelTimeReduction++;
+                    console.log(`Level Time Reduction upgraded! New reduction: ${this.playerStats.levelTimeReduction}%${this.playerStats.levelTimeReduction >= 40 ? ' (MAXED)' : ''}`);
+                } else {
+                    console.log('Level Time Reduction is already at maximum!');
+                    this.inventory.tokens += cost; // Refund tokens
+                }
                 break;
             case 'projectileSpeed':
                 // Cap projectile speed at 200%
@@ -19262,6 +19288,7 @@ class SpaceShooterGame {
         if (!obstacle.atoms || obstacle.atoms.length === 0) return;
         
         const healthPercent = Math.max(0, obstacle.health / obstacle.maxHealth);
+        const simplifyShrink = !obstacle.isBoss && healthPercent < 0.9; // use lighter simplification, no frame skipping
         
         // OPTIMIZATION: Calculate speed for fast-moving molecule optimization
         const speed = Math.sqrt(obstacle.vx * obstacle.vx + obstacle.vy * obstacle.vy);
@@ -19314,6 +19341,11 @@ class SpaceShooterGame {
             this.ctx.strokeStyle = `rgba(255, 150, 150, ${isDamaged ? 0.5 * healthPercent : 0.6})`;
             this.ctx.lineWidth = 1.5;
             this.ctx.shadowBlur = 0; // No shadow for performance
+        } else if (simplifyShrink) {
+            // Shrinking: keep bonds but use simple styling without glow/gradient
+            this.ctx.strokeStyle = `rgba(255, 170, 170, ${isDamaged ? 0.6 : 0.8})`;
+            this.ctx.lineWidth = 2;
+            this.ctx.shadowBlur = 0;
         } else {
             // Default: enhanced bonds with gradient and glow (restored from backup)
             const bondGradient = this.ctx.createLinearGradient(0, 0, 100, 100);
@@ -41468,13 +41500,13 @@ class SpaceShooterGame {
             this.level = targetLevel;
             
             // Update time to match the level (so normal progression continues correctly)
-            // Level is calculated as: Math.floor(this.time / 30) + 1
-            // So time should be: (level - 1) * 30
-            this.time = (this.level - 1) * 30;
+            // Level is calculated as: Math.floor(this.time / adjustedTimePerLevel) + 1
+            const adjustedTimePerLevel = this.getAdjustedTimePerLevel();
+            this.time = (this.level - 1) * adjustedTimePerLevel;
             
             // Update spawn rates based on new level
-            this.targetSpawnRate = Math.max(500, 2000 - this.level * 100);
-            this.obstacleSpawnRate = Math.max(1000, 3000 - this.level * 150);
+            this.targetSpawnRate = this.getTargetSpawnRateForLevel();
+            this.obstacleSpawnRate = this.getObstacleSpawnRateForLevel();
             
             // Ensure game is in playing state
             if (this.gameState !== 'playing') {
@@ -41531,11 +41563,12 @@ class SpaceShooterGame {
         console.log(`[DEV] Level changed from ${oldLevel} to ${this.level}`);
         
         // Update time to match the level (so normal progression continues correctly)
-        this.time = (this.level - 1) * 30;
+        const adjustedTimePerLevel = this.getAdjustedTimePerLevel();
+        this.time = (this.level - 1) * adjustedTimePerLevel;
         
         // Update spawn rates based on new level
-        this.targetSpawnRate = Math.max(500, 2000 - this.level * 100);
-        this.obstacleSpawnRate = Math.max(1000, 3000 - this.level * 150);
+        this.targetSpawnRate = this.getTargetSpawnRateForLevel();
+        this.obstacleSpawnRate = this.getObstacleSpawnRateForLevel();
         
         // Ensure game is in playing state before triggering level-up
         this.gameState = 'playing';
@@ -41555,11 +41588,12 @@ class SpaceShooterGame {
         this.level = Math.max(1, this.level - 1);
         
         // Update time to match the level
-        this.time = (this.level - 1) * 30;
+        const adjustedTimePerLevel = this.getAdjustedTimePerLevel();
+        this.time = (this.level - 1) * adjustedTimePerLevel;
         
         // Update spawn rates based on new level
-        this.targetSpawnRate = Math.max(500, 2000 - this.level * 100);
-        this.obstacleSpawnRate = Math.max(1000, 3000 - this.level * 150);
+        this.targetSpawnRate = this.getTargetSpawnRateForLevel();
+        this.obstacleSpawnRate = this.getObstacleSpawnRateForLevel();
         
         // Don't trigger level-up when going backwards, just update
         this.updateDevUI();

@@ -289,42 +289,54 @@ maxHealth = Math.floor(baseHealth * healthMultiplier)
 ## Spawn Rates
 
 ### Target Spawn Rate (Particles/Pairs)
-**Levels 1-5** (Balanced for food crafting):
+**Levels 1-5** (more particles, lighter start):
 ```javascript
-targetSpawnRate = 3500 - (level - 1) * 100
+targetSpawnRate = 2200 - (level - 1) * 180
 ```
-- Level 1: 3500ms (3.5 seconds)
-- Level 2: 3400ms (3.4 seconds)
-- Level 3: 3300ms (3.3 seconds)
-- Level 4: 3200ms (3.2 seconds)
-- Level 5: 3100ms (3.1 seconds)
+- Level 1: 2200ms
+- Level 2: 2020ms
+- Level 3: 1840ms
+- Level 4: 1660ms
+- Level 5: 1480ms
 
-**Levels 6+**:
+**Levels 6-15** (keeps particles flowing while easing difficulty):
+```javascript
+targetSpawnRate = Math.max(900, 1500 - (level - 6) * 60)
+```
+- Level 6: 1500ms
+- Level 10: 1260ms
+- Level 15: 960ms (floor at 900ms)
+
+**Levels 16+**:
 ```javascript
 targetSpawnRate = Math.max(500, 2000 - level * 100)
 ```
-- Level 6: 1400ms
-- Level 10: 1000ms
-- Level 15: 500ms (minimum)
+- Level 16+: minimum 500ms
 
 ### Obstacle Spawn Rate (Molecules)
-**Levels 1-5** (Balanced for food crafting):
+**Levels 1-5** (fewer early molecules):
 ```javascript
-obstacleSpawnRate = 2500 - (level - 1) * 100
+obstacleSpawnRate = 3200 - (level - 1) * 200
 ```
-- Level 1: 2500ms (2.5 seconds)
-- Level 2: 2400ms (2.4 seconds)
-- Level 3: 2300ms (2.3 seconds)
-- Level 4: 2200ms (2.2 seconds)
-- Level 5: 2100ms (2.1 seconds)
+- Level 1: 3200ms
+- Level 2: 3000ms
+- Level 3: 2800ms
+- Level 4: 2600ms
+- Level 5: 2400ms
 
-**Levels 6+**:
+**Levels 6-15** (keeps molecule pressure modest):
+```javascript
+obstacleSpawnRate = Math.max(1400, 2400 - (level - 6) * 110)
+```
+- Level 6: 2400ms
+- Level 10: 1960ms
+- Level 15: 1410ms (floor at 1400ms)
+
+**Levels 16+**:
 ```javascript
 obstacleSpawnRate = Math.max(1000, 3000 - level * 150)
 ```
-- Level 6: 2100ms
-- Level 10: 1500ms
-- Level 20: 0ms → 1000ms (minimum)
+- Level 16+: minimum 1000ms
 
 ### Enemy Spawn Rate (Bell Mode)
 ```javascript

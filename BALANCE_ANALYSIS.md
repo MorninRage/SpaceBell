@@ -314,6 +314,11 @@ difficulty = 0.5 + (level - 1) * 0.02 + damageMultiplier * 0.3 + weaponCount * 0
 
 ### 7.1 Critical Fixes (High Priority)
 
+**Applied in code now**
+- Spread weapon unlock moved to level 20 to delay early AoE.
+- Stat unlock tiers: Combat at 1; Defense at 10; Economy/Progression at 20; Health sustain at 30.
+- Defense/Economy stat costs step up (~30% after 5 and again after 10 purchases) to slow mid-game stacking.
+
 1. **Add Caps to All Uncapped Stats**:
    - Token Drop Rate: 200% max
    - Material Drop Rate: 300% max
@@ -347,8 +352,8 @@ difficulty = 0.5 + (level - 1) * 0.02 + damageMultiplier * 0.3 + weaponCount * 0
    - Energy Drink: Increase hunger from 30 to 35 (2.19 efficiency)
 
 6. **Reduce Early Weapon Costs**:
-   - Rapid: 15 → 12 materials
-   - Spread: 25 → 20 materials
+   - Rapid: 15 → 12 materials (optional)
+   - Spread: Unlock now at level 20 (implemented); cost trim to 20 materials optional if mid-game pacing feels slow
 
 ### 7.3 Quality of Life (Low Priority)
 

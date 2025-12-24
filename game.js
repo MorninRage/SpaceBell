@@ -9262,8 +9262,8 @@ class SpaceShooterGame {
         if (type === 'weapons') {
             if (name === 'rapid' && this.level < 3) {
                 return false; // Rapid requires level 3
-            } else if (name === 'spread' && this.level < 5) {
-                return false; // Spread requires level 5
+            } else if (name === 'spread' && this.level < 20) {
+                return false; // Spread requires level 20
             } else if (name === 'laser' && this.level < 10) {
                 return false; // Laser requires level 10
             } else if (name === 'automatic' && this.level < 15) {
@@ -9899,6 +9899,30 @@ class SpaceShooterGame {
             return false;
         }
         
+        const statRequiredLevels = {
+            speed: 1,
+            fireRate: 1,
+            damage: 1,
+            projectileSpeed: 1,
+            criticalHitChance: 1,
+            criticalHitDamage: 1,
+            shieldCapacityBonus: 10,
+            shieldRegenBonus: 10,
+            damageReduction: 10,
+            evasion: 10,
+            materialDropRate: 20,
+            tokenDropRate: 20,
+            levelTimeReduction: 20,
+            maxHealth: 30,
+            healthRegen: 30,
+            health: 1
+        };
+        const requiredLevel = statRequiredLevels[stat] || 0;
+        if (this.level < requiredLevel) {
+            console.log(`Stat '${stat}' unlocks at level ${requiredLevel}.`);
+            return false;
+        }
+        
         if (this.inventory.tokens < cost) {
             console.log('Not enough tokens!');
             return false;
@@ -10336,7 +10360,7 @@ class SpaceShooterGame {
                 // Check level requirements
                 let levelRequired = 0;
                 if (weapon === 'rapid') levelRequired = 3;
-                else if (weapon === 'spread') levelRequired = 5;
+                else if (weapon === 'spread') levelRequired = 20;
                 else if (weapon === 'laser') levelRequired = 10;
                 else if (weapon === 'automatic') levelRequired = 15;
                 else if (weapon === 'transformationPredictor') levelRequired = 30;
@@ -11276,24 +11300,48 @@ class SpaceShooterGame {
             
             // Calculate costs based on upgrade levels and game progression
             const baseCostMultiplier = 1 + (Math.log(this.level + 1) * 0.5);
+            const tierMultiplier = (count) => {
+                let mult = 1;
+                if (count >= 5) mult *= 1.3;
+                if (count >= 10) mult *= 1.3;
+                return mult;
+            };
+            const statRequiredLevels = {
+                speed: 1,
+                fireRate: 1,
+                damage: 1,
+                projectileSpeed: 1,
+                criticalHitChance: 1,
+                criticalHitDamage: 1,
+                shieldCapacityBonus: 10,
+                shieldRegenBonus: 10,
+                damageReduction: 10,
+                evasion: 10,
+                materialDropRate: 20,
+                tokenDropRate: 20,
+                levelTimeReduction: 20,
+                maxHealth: 30,
+                healthRegen: 30,
+                health: 1
+            };
             
             const upgrades = [
-                { name: '⚡ Speed', stat: 'speed', cost: Math.floor((10 + (speedUpgrades * 5)) * baseCostMultiplier), current: this.playerStats.speed, description: `Current: ${this.playerStats.speed} (Next: +30)`, category: 'combat' },
-                { name: '🔥 Fire Rate', stat: 'fireRate', cost: Math.floor((15 + (fireRateUpgrades * 5)) * baseCostMultiplier), current: this.playerStats.fireRate.toFixed(2), description: `Current: ${this.playerStats.fireRate.toFixed(2)}/s (Next: +0.2/s)`, category: 'combat' },
-                { name: '💥 Damage', stat: 'damage', cost: Math.floor((20 + (this.upgradeLevels.damage || 0) * 5) * baseCostMultiplier), current: this.playerStats.damage, description: `Base: ${this.playerStats.baseDamage} → Current: ${this.playerStats.damage} (Next: +2)`, category: 'combat' },
-                { name: '🚀 Projectile Speed', stat: 'projectileSpeed', cost: Math.floor((20 + (this.upgradeLevels.projectileSpeed || 0) * 5) * baseCostMultiplier), current: this.playerStats.projectileSpeed.toFixed(1) + '%', description: `Current: +${this.playerStats.projectileSpeed.toFixed(1)}% (Next: +10%)`, category: 'combat' },
-                { name: '🎯 Critical Hit Chance', stat: 'criticalHitChance', cost: Math.floor((30 + (this.upgradeLevels.criticalHitChance || 0) * 5) * baseCostMultiplier), current: this.playerStats.criticalHitChance.toFixed(1) + '%', description: `Current: ${this.playerStats.criticalHitChance.toFixed(1)}% (Next: +2%, Max: 100%)`, category: 'combat' },
-                { name: '⚔️ Critical Hit Damage', stat: 'criticalHitDamage', cost: Math.floor((35 + (this.upgradeLevels.criticalHitDamage || 0) * 5) * baseCostMultiplier), current: this.playerStats.criticalHitDamage.toFixed(2) + 'x', description: `Current: ${this.playerStats.criticalHitDamage.toFixed(2)}x (Next: +0.05x)`, category: 'combat' },
-                { name: '🛡️ Shield Capacity', stat: 'shieldCapacityBonus', cost: Math.floor((30 + (this.upgradeLevels.shieldCapacityBonus || 0) * 5) * baseCostMultiplier), current: this.playerStats.shieldCapacityBonus.toFixed(1) + '%', description: `Current: +${this.playerStats.shieldCapacityBonus.toFixed(1)}% (Next: +5%, Max: 100%)`, category: 'defense' },
-                { name: '🔋 Shield Regeneration', stat: 'shieldRegenBonus', cost: Math.floor((35 + (this.upgradeLevels.shieldRegenBonus || 0) * 5) * baseCostMultiplier), current: this.playerStats.shieldRegenBonus.toFixed(1) + '/s', description: `Current: +${this.playerStats.shieldRegenBonus.toFixed(1)}/s (Next: +1/s)`, category: 'defense' },
-                { name: '🛡️ Damage Reduction', stat: 'damageReduction', cost: Math.floor((40 + (this.upgradeLevels.damageReduction || 0) * 5) * baseCostMultiplier), current: this.playerStats.damageReduction.toFixed(1) + '%', description: `Current: ${this.playerStats.damageReduction.toFixed(1)}% (Next: +1%, Max: 50%)`, category: 'defense' },
-                { name: '✨ Evasion', stat: 'evasion', cost: Math.floor((40 + (this.upgradeLevels.evasion || 0) * 5) * baseCostMultiplier), current: this.playerStats.evasion.toFixed(1) + '%', description: `Current: ${this.playerStats.evasion.toFixed(1)}% (Next: +1%, Max: 30%)`, category: 'defense' },
-                { name: '💎 Material Drop Rate', stat: 'materialDropRate', cost: Math.floor((25 + (this.upgradeLevels.materialDropRate || 0) * 5) * baseCostMultiplier), current: this.playerStats.materialDropRate.toFixed(1) + '%', description: `Current: +${this.playerStats.materialDropRate.toFixed(1)}% (Next: +5%)`, category: 'economy' },
-                { name: '💰 Token Drop Rate', stat: 'tokenDropRate', cost: Math.floor((30 + (this.upgradeLevels.tokenDropRate || 0) * 5) * baseCostMultiplier), current: this.playerStats.tokenDropRate.toFixed(1) + '%', description: `Current: +${this.playerStats.tokenDropRate.toFixed(1)}% (Next: +5%)`, category: 'economy' },
-                { name: '⏱️ Level Time Reduction', stat: 'levelTimeReduction', cost: Math.floor((45 + (this.upgradeLevels.levelTimeReduction || 0) * 7) * baseCostMultiplier), current: this.playerStats.levelTimeReduction.toFixed(1) + '%', description: `Current: -${this.playerStats.levelTimeReduction.toFixed(1)}% time per level (Next: -3%, Max: 40% = 18s per level)`, category: 'economy' },
-                { name: '❤️ Max Health', stat: 'maxHealth', cost: Math.floor((25 + (this.upgradeLevels.maxHealth || 0) * 5) * baseCostMultiplier), current: this.playerStats.maxHealth, description: `Current: ${this.playerStats.maxHealth} HP (Next: +10)`, category: 'quality' },
-                { name: '💚 Health Regeneration', stat: 'healthRegen', cost: Math.floor((30 + (this.upgradeLevels.healthRegen || 0) * 5) * baseCostMultiplier), current: this.playerStats.healthRegen.toFixed(1) + ' HP/s', description: `Current: ${this.playerStats.healthRegen.toFixed(1)} HP/s (Next: +0.5 HP/s)`, category: 'quality' },
-                { name: '💉 Health Pack', stat: 'health', cost: Math.floor((20 + (healthPacksOwned * 5)) * baseCostMultiplier), current: healthPacksOwned, description: `Owned: ${healthPacksOwned} packs (Restores 50 HP each)`, category: 'consumable' }
+                { name: '⚡ Speed', stat: 'speed', requiredLevel: statRequiredLevels.speed, cost: Math.floor((10 + (speedUpgrades * 5)) * baseCostMultiplier), current: this.playerStats.speed, description: `Current: ${this.playerStats.speed} (Next: +30)`, category: 'combat' },
+                { name: '🔥 Fire Rate', stat: 'fireRate', requiredLevel: statRequiredLevels.fireRate, cost: Math.floor((15 + (fireRateUpgrades * 5)) * baseCostMultiplier), current: this.playerStats.fireRate.toFixed(2), description: `Current: ${this.playerStats.fireRate.toFixed(2)}/s (Next: +0.2/s)`, category: 'combat' },
+                { name: '💥 Damage', stat: 'damage', requiredLevel: statRequiredLevels.damage, cost: Math.floor((20 + (this.upgradeLevels.damage || 0) * 5) * baseCostMultiplier), current: this.playerStats.damage, description: `Base: ${this.playerStats.baseDamage} → Current: ${this.playerStats.damage} (Next: +2)`, category: 'combat' },
+                { name: '🚀 Projectile Speed', stat: 'projectileSpeed', requiredLevel: statRequiredLevels.projectileSpeed, cost: Math.floor((20 + (this.upgradeLevels.projectileSpeed || 0) * 5) * baseCostMultiplier), current: this.playerStats.projectileSpeed.toFixed(1) + '%', description: `Current: +${this.playerStats.projectileSpeed.toFixed(1)}% (Next: +10%)`, category: 'combat' },
+                { name: '🎯 Critical Hit Chance', stat: 'criticalHitChance', requiredLevel: statRequiredLevels.criticalHitChance, cost: Math.floor((30 + (this.upgradeLevels.criticalHitChance || 0) * 5) * baseCostMultiplier), current: this.playerStats.criticalHitChance.toFixed(1) + '%', description: `Current: ${this.playerStats.criticalHitChance.toFixed(1)}% (Next: +2%, Max: 100%)`, category: 'combat' },
+                { name: '⚔️ Critical Hit Damage', stat: 'criticalHitDamage', requiredLevel: statRequiredLevels.criticalHitDamage, cost: Math.floor((35 + (this.upgradeLevels.criticalHitDamage || 0) * 5) * baseCostMultiplier), current: this.playerStats.criticalHitDamage.toFixed(2) + 'x', description: `Current: ${this.playerStats.criticalHitDamage.toFixed(2)}x (Next: +0.05x)`, category: 'combat' },
+                { name: '🛡️ Shield Capacity', stat: 'shieldCapacityBonus', requiredLevel: statRequiredLevels.shieldCapacityBonus, cost: Math.floor((30 + (this.upgradeLevels.shieldCapacityBonus || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.shieldCapacityBonus || 0)), current: this.playerStats.shieldCapacityBonus.toFixed(1) + '%', description: `Current: +${this.playerStats.shieldCapacityBonus.toFixed(1)}% (Next: +5%, Max: 100%)`, category: 'defense' },
+                { name: '🔋 Shield Regeneration', stat: 'shieldRegenBonus', requiredLevel: statRequiredLevels.shieldRegenBonus, cost: Math.floor((35 + (this.upgradeLevels.shieldRegenBonus || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.shieldRegenBonus || 0)), current: this.playerStats.shieldRegenBonus.toFixed(1) + '/s', description: `Current: +${this.playerStats.shieldRegenBonus.toFixed(1)}/s (Next: +1/s)`, category: 'defense' },
+                { name: '🛡️ Damage Reduction', stat: 'damageReduction', requiredLevel: statRequiredLevels.damageReduction, cost: Math.floor((40 + (this.upgradeLevels.damageReduction || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.damageReduction || 0)), current: this.playerStats.damageReduction.toFixed(1) + '%', description: `Current: ${this.playerStats.damageReduction.toFixed(1)}% (Next: +1%, Max: 50%)`, category: 'defense' },
+                { name: '✨ Evasion', stat: 'evasion', requiredLevel: statRequiredLevels.evasion, cost: Math.floor((40 + (this.upgradeLevels.evasion || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.evasion || 0)), current: this.playerStats.evasion.toFixed(1) + '%', description: `Current: ${this.playerStats.evasion.toFixed(1)}% (Next: +1%, Max: 30%)`, category: 'defense' },
+                { name: '💎 Material Drop Rate', stat: 'materialDropRate', requiredLevel: statRequiredLevels.materialDropRate, cost: Math.floor((25 + (this.upgradeLevels.materialDropRate || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.materialDropRate || 0)), current: this.playerStats.materialDropRate.toFixed(1) + '%', description: `Current: +${this.playerStats.materialDropRate.toFixed(1)}% (Next: +5%)`, category: 'economy' },
+                { name: '💰 Token Drop Rate', stat: 'tokenDropRate', requiredLevel: statRequiredLevels.tokenDropRate, cost: Math.floor((30 + (this.upgradeLevels.tokenDropRate || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.tokenDropRate || 0)), current: this.playerStats.tokenDropRate.toFixed(1) + '%', description: `Current: +${this.playerStats.tokenDropRate.toFixed(1)}% (Next: +5%)`, category: 'economy' },
+                { name: '⏱️ Level Time Reduction', stat: 'levelTimeReduction', requiredLevel: statRequiredLevels.levelTimeReduction, cost: Math.floor((45 + (this.upgradeLevels.levelTimeReduction || 0) * 7) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.levelTimeReduction || 0)), current: this.playerStats.levelTimeReduction.toFixed(1) + '%', description: `Current: -${this.playerStats.levelTimeReduction.toFixed(1)}% time per level (Next: -3%, Max: 40% = 18s per level)`, category: 'economy' },
+                { name: '❤️ Max Health', stat: 'maxHealth', requiredLevel: statRequiredLevels.maxHealth, cost: Math.floor((25 + (this.upgradeLevels.maxHealth || 0) * 5) * baseCostMultiplier), current: this.playerStats.maxHealth, description: `Current: ${this.playerStats.maxHealth} HP (Next: +10)`, category: 'quality' },
+                { name: '💚 Health Regeneration', stat: 'healthRegen', requiredLevel: statRequiredLevels.healthRegen, cost: Math.floor((30 + (this.upgradeLevels.healthRegen || 0) * 5) * baseCostMultiplier), current: this.playerStats.healthRegen.toFixed(1) + ' HP/s', description: `Current: ${this.playerStats.healthRegen.toFixed(1)} HP/s (Next: +0.5 HP/s)`, category: 'quality' },
+                { name: '💉 Health Pack', stat: 'health', requiredLevel: statRequiredLevels.health, cost: Math.floor((20 + (healthPacksOwned * 5)) * baseCostMultiplier), current: healthPacksOwned, description: `Owned: ${healthPacksOwned} packs (Restores 50 HP each)`, category: 'consumable' }
             ];
             
             const categories = {
@@ -11320,7 +11368,8 @@ class SpaceShooterGame {
                 upgradesList.appendChild(categoryHeader);
                 
                 category.upgrades.forEach(upgrade => {
-                    const canAfford = this.inventory.tokens >= upgrade.cost;
+                    const unlocked = this.level >= (upgrade.requiredLevel || 0);
+                    const canAfford = unlocked && this.inventory.tokens >= upgrade.cost;
                     const item = document.createElement('div');
                     item.className = 'shop-item';
                     item.innerHTML = `
@@ -11329,6 +11378,7 @@ class SpaceShooterGame {
                             <div style="font-size: 0.85em; color: #4fc3f7; margin-top: 3px;">
                                 ${upgrade.description}
                             </div>
+                            ${!unlocked ? `<div style="font-size: 0.85em; color: #ff9800; margin-top: 4px;">Unlocks at Level ${upgrade.requiredLevel}</div>` : ''}
                             <div style="font-size: 0.9em; color: #aaa; margin-top: 5px;">
                                 Cost: ${upgrade.cost} tokens
                             </div>

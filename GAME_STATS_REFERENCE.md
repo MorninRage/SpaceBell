@@ -175,6 +175,13 @@ finalCost = baseCost * costMultiplier
 | Projectile Speed | +10% | 200% | 20 upgrades |
 | Health Regen | +0.5 HP/s | 10 HP/s | 20 upgrades |
 
+### Stat Unlock Levels & Cost Steps
+- Level 1: Combat — speed, fire rate, damage, projectile speed, critical chance/damage
+- Level 10: Defense — max health, shield capacity/regen, damage reduction, evasion
+- Level 20: Economy/Progression — material drop rate, token drop rate, level time reduction
+- Level 30: Health sustain — health regen (max health continues from defense tier)
+- Cost steps: defense/economy stats increase cost by ~30% after 5 purchases and again after 10 purchases to slow mid-game stacking
+
 ---
 
 ## Enemy Scaling
@@ -389,7 +396,7 @@ finalTokens = baseTokens * tokenMultiplier * tokenDropBonus
 |--------|---------|----------|--------|-------|--------|-----------|
 | Basic | 1 | 1 | 0 | 1 | 0 | 1 |
 | Rapid | 8 | 5 | 2 | 0 | 0 | 3 |
-| Spread | 12 | 8 | 3 | 2 | 0 | 5 |
+| Spread | 12 | 8 | 3 | 2 | 0 | 20 |
 | Laser | 18 | 12 | 6 | 4 | 0 | 10 |
 | Automatic | 25 | 18 | 8 | 8 | 0 | 15 |
 | Transformation Predictor | 120 | 100 | 80 | 60 | 50 | 30 |

@@ -107,6 +107,7 @@ class AudioManager {
         };
         
     }
+
     // Initialize audio (HTML5 Audio doesn't need special setup, but we'll use this for user interaction)
     init() {
         // HTML5 Audio works immediately, but browsers require user interaction to play
@@ -633,6 +634,7 @@ class SpaceShooterGame {
         this.devInfiniteAmmo = false;
         this.devShowDebug = false;
         this.devSpeedMultiplier = 1.0;
+        this.showBossDebugOverlay = false; // UI-only overlay, off by default
         
         if (this.devMode) {
             console.log('[DEV] ========================================');
@@ -6451,6 +6453,10 @@ class SpaceShooterGame {
             // Note: Red molecules ARE affected by critical hits and RPG stats (unlike particles)
             if (!bulletHit) {
                 for (let obstacle of this.obstacles) {
+                    // Skip destroyed obstacles so dead boss layers don't block shots
+                    if (obstacle.health !== undefined && obstacle.health <= 0) {
+                        continue;
+                    }
                     if (this.checkCollision(bullet, obstacle)) {
                         // Boss puzzle mechanics: check if boss part can take damage
                         // ORDER: 1) Boss enemies (ships) must be destroyed first
@@ -6521,13 +6527,14 @@ class SpaceShooterGame {
                                         canDamage = true;
                                     } else if (obstacle.bossPart === 'innerMembrane') {
                                         // Inner membrane (outer feature) only vulnerable when outer is destroyed
-                                        canDamage = this.bossPuzzleState && 
-                                                  this.bossPuzzleState.outerMembraneDestroyed;
+                                        canDamage = (this.bossPuzzleState && this.bossPuzzleState.outerMembraneDestroyed) ||
+                                                    obstacle.canTakeDamage === true;
                                     } else if (obstacle.bossPart === 'nucleus') {
                                         // Nucleus (core) only vulnerable when both membranes (outer features) are destroyed
-                                        canDamage = this.bossPuzzleState && 
-                                                  this.bossPuzzleState.outerMembraneDestroyed && 
-                                                  this.bossPuzzleState.innerMembraneDestroyed;
+                                        canDamage = (this.bossPuzzleState && 
+                                                     this.bossPuzzleState.outerMembraneDestroyed && 
+                                                     this.bossPuzzleState.innerMembraneDestroyed) ||
+                                                    obstacle.canTakeDamage === true;
                                     }
                                 } else if (obstacle.bossType === 'advanced') {
                                     // Level 75+: Advanced bosses - no puzzle, but still need boss enemies destroyed first
@@ -6655,6 +6662,12 @@ class SpaceShooterGame {
                                     if (obstacle.bossPart === 'outerMembrane') {
                                         if (this.bossPuzzleState) {
                                             this.bossPuzzleState.outerMembraneDestroyed = true;
+                                            // Make the destroyed layer non-blocking and mark for removal
+                                            obstacle.health = 0;
+                                            obstacle.size = 0.0001;
+                                            obstacle.canTakeDamage = false;
+                                            obstacle._remove = true;
+                                            this._cleanupNeeded = true;
                                             const innerMembrane = this.obstacles.find(o => o.isBoss && o.bossPart === 'innerMembrane');
                                             if (innerMembrane) innerMembrane.canTakeDamage = true;
                                         }
@@ -6662,6 +6675,12 @@ class SpaceShooterGame {
                                         if (this.bossPuzzleState) {
                                             this.bossPuzzleState.innerMembraneDestroyed = true;
                                             this.bossPuzzleState.nucleusVulnerable = true;
+                                            // Make the destroyed layer non-blocking and mark for removal
+                                            obstacle.health = 0;
+                                            obstacle.size = 0.0001;
+                                            obstacle.canTakeDamage = false;
+                                            obstacle._remove = true;
+                                            this._cleanupNeeded = true;
                                             const nucleus = this.obstacles.find(o => o.isBoss && o.bossPart === 'nucleus');
                                             if (nucleus) nucleus.canTakeDamage = true;
                                         }
@@ -7882,7 +7901,70 @@ class SpaceShooterGame {
                 this.exitBossMode();
             }
         }
-        
+
+        // Boss debug overlay (UI-only; hidden unless explicitly enabled)
+        if (this.showBossDebugOverlay) {
+            this.updateBossDebugOverlay();
+        } else {
+            const dbg = document.getElementById('boss-debug-overlay');
+            if (dbg) dbg.style.display = 'none';
+        }
+
+        // Cleanup: remove boss layers marked for removal (e.g., destroyed membranes)
+        if (this._cleanupNeeded !== false) {
+            const before = this.obstacles.length;
+            this.obstacles = this.obstacles.filter(o => !o._remove);
+            const after = this.obstacles.length;
+            // Avoid repeated filters if nothing changed
+            this._cleanupNeeded = before !== after;
+        }
+
+        // Boss fail-safe: prevent Cell Membrane soft-lock by auto-advancing stuck layers
+        if (this.bossMode && this.currentBoss && this.currentBoss.bossType === 'cellMembrane') {
+            const now = Date.now();
+            const state = this.bossPuzzleState || {};
+            const outer = this.obstacles.find(o => o.isBoss && o.bossPart === 'outerMembrane');
+            const inner = this.obstacles.find(o => o.isBoss && o.bossPart === 'innerMembrane');
+            if (!this._cellBossTracker) this._cellBossTracker = {};
+            const t = this._cellBossTracker;
+            const allBossEnemiesDestroyed = this.bossEnemies.length === 0;
+
+            // Outer membrane: ensure damageable; force-remove after 5s of no progress once ships are dead
+            if (outer && !state.outerMembraneDestroyed) {
+                outer.canTakeDamage = true;
+                if (t.outerLastHp === undefined || outer.health < t.outerLastHp - 1) {
+                    t.outerLastHp = outer.health;
+                    t.outerLastChange = now;
+                } else if (allBossEnemiesDestroyed && now - (t.outerLastChange || now) > 5000) {
+                    outer.health = 0;
+                    outer._remove = true;
+                    this._cleanupNeeded = true;
+                    state.outerMembraneDestroyed = true;
+                    const innerMembrane = this.obstacles.find(o => o.isBoss && o.bossPart === 'innerMembrane');
+                    if (innerMembrane) innerMembrane.canTakeDamage = true;
+                    t.outerLastChange = now;
+                }
+            }
+
+            // Inner membrane: ensure damageable; force-remove after 5s of no progress once outer is gone and ships dead
+            if (inner && state.outerMembraneDestroyed && !state.innerMembraneDestroyed) {
+                inner.canTakeDamage = true;
+                if (t.innerLastHp === undefined || inner.health < t.innerLastHp - 1) {
+                    t.innerLastHp = inner.health;
+                    t.innerLastChange = now;
+                } else if (allBossEnemiesDestroyed && now - (t.innerLastChange || now) > 5000) {
+                    inner.health = 0;
+                    inner._remove = true;
+                    this._cleanupNeeded = true;
+                    state.innerMembraneDestroyed = true;
+                    state.nucleusVulnerable = true;
+                    const nucleus = this.obstacles.find(o => o.isBoss && o.bossPart === 'nucleus');
+                    if (nucleus) nucleus.canTakeDamage = true;
+                    t.innerLastChange = now;
+                }
+            }
+        }
+
         // Optimized: Batch updateStats - only update once per frame if needed
         if (this._statsNeedsUpdate) {
             this.updateStats();
@@ -24798,9 +24880,14 @@ class SpaceShooterGame {
             enemy.x += moveX + separationX;
             enemy.y += moveY + separationY;
             
-            // Keep enemy on screen - boss mode enemies must stay in the scene
-            // Use enemy size as margin to keep them fully visible
-            const margin = enemy.size || 20;
+            // Keep enemy on screen - boss mode enemies must stay fully visible
+            // Use a slightly larger margin and a soft push back toward the play area
+            const margin = Math.max(60, (enemy.size || 20) * 1.4);
+            if (enemy.x < margin) enemy.x += (margin - enemy.x) * 0.6;
+            if (enemy.x > this.canvas.width - margin) enemy.x -= (enemy.x - (this.canvas.width - margin)) * 0.6;
+            if (enemy.y < margin) enemy.y += (margin - enemy.y) * 0.6;
+            if (enemy.y > this.canvas.height - margin) enemy.y -= (enemy.y - (this.canvas.height - margin)) * 0.6;
+            // Final clamp in case the push wasn't enough
             enemy.x = Math.max(margin, Math.min(this.canvas.width - margin, enemy.x));
             enemy.y = Math.max(margin, Math.min(this.canvas.height - margin, enemy.y));
             
@@ -42205,6 +42292,52 @@ class SpaceShooterGame {
         });
     }
 }
+
+// Boss debug overlay helper (non-intrusive, visual only)
+SpaceShooterGame.prototype.updateBossDebugOverlay = function() {
+    const id = 'boss-debug-overlay';
+    let el = document.getElementById(id);
+    if (!this.bossMode || this.gameState !== 'playing') {
+        if (el) el.style.display = 'none';
+        return;
+    }
+    if (!el) {
+        el = document.createElement('div');
+        el.id = id;
+        el.style.position = 'fixed';
+        el.style.top = '10px';
+        el.style.right = '10px';
+        el.style.padding = '10px 12px';
+        el.style.background = 'rgba(0,0,0,0.6)';
+        el.style.color = '#fff';
+        el.style.font = '12px monospace';
+        el.style.zIndex = 5000;
+        el.style.border = '1px solid #4fc3f7';
+        el.style.borderRadius = '6px';
+        el.style.pointerEvents = 'none';
+        document.body.appendChild(el);
+    }
+    const bossParts = this.obstacles
+        .filter(o => o.isBoss)
+        .map(o => ({
+            part: o.bossPart || 'core',
+            hp: Math.max(0, Math.round(o.health || 0)),
+            max: Math.round(o.maxHealth || 0),
+            can: o.canTakeDamage === true,
+            remove: !!o._remove
+        }));
+    const state = this.bossPuzzleState || {};
+    const allBossEnemiesDestroyed = this.bossMode && this.bossEnemies.length === 0;
+    const lines = [
+        `bossEnemies: ${this.bossEnemies.length} (allDead:${allBossEnemiesDestroyed})`,
+        `outerDestroyed: ${!!state.outerMembraneDestroyed}`,
+        `innerDestroyed: ${!!state.innerMembraneDestroyed}`,
+        `nucleusVulnerable: ${!!state.nucleusVulnerable}`,
+        `parts: ${bossParts.map(p => `${p.part}[${p.hp}/${p.max}|can:${p.can}|rm:${p.remove}]`).join('  ')}`
+    ];
+    el.textContent = lines.join('\n');
+    el.style.display = 'block';
+};
 
 window.addEventListener('load', () => {
     console.log('Starting Beyond Bell Space Shooter...');

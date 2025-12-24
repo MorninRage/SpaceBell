@@ -131,6 +131,10 @@ class AudioManager {
         this.updateVolumes();
     }
     
+    getMusicVolume() {
+        return this.volumes.master * this.volumes.music;
+    }
+    
     // Get or create audio element (HTML5 Audio works with file://)
     getAudioElement(url, channel = 'sfx') {
         try {
@@ -244,8 +248,6 @@ class AudioManager {
     crossfadeToNewTrack(newUrl, loop, fadeIn) {
         const oldAudio = this.currentMusicElement;
         const crossfadeDuration = 3.0; // 3 seconds crossfade
-        const targetVolume = this.volumes.master * this.volumes.music;
-        
         // Create new audio element
         const newAudio = new Audio(newUrl);
         newAudio.preload = 'auto';
@@ -266,6 +268,7 @@ class AudioManager {
             // Crossfade: fade out old, fade in new simultaneously
             const startTime = Date.now();
             const fadeInterval = setInterval(() => {
+                const targetVolume = this.getMusicVolume();
                 const elapsed = (Date.now() - startTime) / 1000;
                 const progress = Math.min(1.0, elapsed / crossfadeDuration);
                 
@@ -310,7 +313,7 @@ class AudioManager {
             audio.preload = 'auto';
             // Set initial volume - if looping with fadeIn, seamless loop will handle it
             // Otherwise, set volume based on fadeIn parameter
-            audio.volume = (fadeIn && loop) ? 0 : (fadeIn ? 0 : (this.volumes.master * this.volumes.music));
+            audio.volume = (fadeIn && loop) ? 0 : (fadeIn ? 0 : this.getMusicVolume());
             audio.dataset.isMusic = 'true';
             
             // Add error handlers
@@ -343,7 +346,7 @@ class AudioManager {
                 // For non-looping tracks, use quick fade-in
                 if (fadeIn && !loop) {
                     // Quick fade-in for non-looping tracks
-                    const targetVolume = this.volumes.master * this.volumes.music;
+                    const targetVolume = this.getMusicVolume();
                     const fadeStep = targetVolume / (this.musicFadeTime / 50); // 50ms steps
                     let currentVolume = 0;
                     
@@ -414,8 +417,6 @@ class AudioManager {
         let isFadingIn = fadeIn; // Start with fade-in if requested
         let fadeOutStartTime = 0;
         let fadeInStartTime = 0;
-        const targetVolume = this.volumes.master * this.volumes.music;
-        
         const seamlessLoop = () => {
             if (!loop || !this.currentMusicElement || this.currentMusicElement !== audio) {
                 return;
@@ -435,7 +436,7 @@ class AudioManager {
                 
                 // Calculate fade out volume (1.0 at start of fade, 0.0 at end)
                 const fadeProgress = timeRemaining / fadeDuration;
-                const fadeOutVolume = Math.max(0, fadeProgress) * targetVolume;
+                const fadeOutVolume = Math.max(0, fadeProgress) * this.getMusicVolume();
                 audio.volume = fadeOutVolume;
             } else if (timeRemaining > fadeDuration) {
                 // Not in fade zone, ensure full volume
@@ -443,7 +444,7 @@ class AudioManager {
                     isFadingOut = false;
                 }
                 if (!isFadingIn) {
-                    audio.volume = targetVolume;
+                    audio.volume = this.getMusicVolume();
                 }
             }
             
@@ -465,12 +466,12 @@ class AudioManager {
             // Fade in during first 10 seconds after restart
             if (isFadingIn && currentTime < fadeDuration) {
                 const fadeProgress = currentTime / fadeDuration;
-                const fadeInVolume = Math.min(1.0, fadeProgress) * targetVolume;
+                const fadeInVolume = Math.min(1.0, fadeProgress) * this.getMusicVolume();
                 audio.volume = fadeInVolume;
             } else if (isFadingIn && currentTime >= fadeDuration) {
                 // Fade in complete
                 isFadingIn = false;
-                audio.volume = targetVolume;
+                audio.volume = this.getMusicVolume();
             }
         };
         

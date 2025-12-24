@@ -48,6 +48,8 @@ This game visualizes the key argument:
 - No external dependencies
 - Responsive design
 - Real-time physics simulation
+- Boss logic: for the level 60 Cell Membrane boss, destroyed membranes are removed from collision, damage gates are reinforced with per-part `canTakeDamage`, and a soft-lock fail-safe advances the phase if no progress is detected (outer → inner → nucleus). A UI-only boss debug overlay exists for troubleshooting but is disabled by default.
+- Debug overlay: a lightweight, UI-only boss debug overlay can be toggled by setting `this.showBossDebugOverlay = true` in `SpaceShooterGame` (e.g., near its initialization). By default it’s off; when enabled it renders top-right during boss fights and shows bossEnemies count, puzzle flags, and per-part health/canTakeDamage. It has no gameplay impact.
 
 ## Deployment
 

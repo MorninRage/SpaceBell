@@ -18,6 +18,7 @@
 - **Loop control**: `gameLoop()` with optional FPS cap; pause/cutscene handling; resume smoothing to avoid delta spikes.
 - **Rendering pipeline**:
   - Uses the main canvas 2D context for everything (backgrounds, player, bullets, particles, UI overlays).
+  - Preload overlay blocks start until pre-shaded assets are ready (bullets pre-rendered; enhanced materials stay until higher item-count thresholds: medium 100, low 160, minimal 220).
   - Bullet rendering includes culling margins and now quality tiers with short-lived locks:
     - `minimal`: solid circles only, no shadows/particles/gradients.
     - `low`: solid fill + simple trail line, no gradients/shadows.

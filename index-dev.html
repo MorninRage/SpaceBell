@@ -67,6 +67,42 @@
             padding: 0 !important;
         }
 
+        /* Preload Overlay */
+        #preloadOverlay {
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(circle at 30% 30%, rgba(79, 195, 247, 0.08), rgba(0, 0, 0, 0.85)),
+                        radial-gradient(circle at 70% 70%, rgba(156, 39, 176, 0.08), rgba(0, 0, 0, 0.85));
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            color: #e0f7ff;
+            backdrop-filter: blur(4px);
+        }
+        #preloadText {
+            font-size: 20px;
+            margin-bottom: 16px;
+            letter-spacing: 0.5px;
+            text-shadow: 0 0 8px rgba(79, 195, 247, 0.8);
+        }
+        #preloadBar {
+            width: 60%;
+            max-width: 520px;
+            height: 14px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 999px;
+            overflow: hidden;
+            box-shadow: 0 0 12px rgba(79, 195, 247, 0.35);
+        }
+        #preloadBarFill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #4fc3f7 0%, #9c27b0 100%);
+            box-shadow: 0 0 10px rgba(79, 195, 247, 0.8);
+        }
+
         /* Dev Mode Banner */
         #devBanner {
             position: fixed;
@@ -1266,6 +1302,11 @@
     
     <div id="gameContainer">
         <canvas id="gameCanvas"></canvas>
+
+        <div id="preloadOverlay">
+            <div id="preloadText">Loading assets…</div>
+            <div id="preloadBar"><div id="preloadBarFill"></div></div>
+        </div>
 
         <div id="ui">
             <h2>Beyond Bell: Space Shooter</h2>

@@ -318,6 +318,8 @@ difficulty = 0.5 + (level - 1) * 0.02 + damageMultiplier * 0.3 + weaponCount * 0
 - Spread weapon unlock moved to level 20 to delay early AoE.
 - Stat unlock tiers: Combat at 1; Defense at 10; Economy/Progression at 20; Health sustain at 30.
 - Defense/Economy stat costs step up (~30% after 5 and again after 10 purchases) to slow mid-game stacking.
+- Pre-shading preload added (blocking overlay); bullets use pre-shaded sprites.
+- Material visual thresholds doubled for enhanced drops → simple spheres at higher counts: medium 100, low 160, minimal 220.
 
 1. **Add Caps to All Uncapped Stats**:
    - Token Drop Rate: 200% max

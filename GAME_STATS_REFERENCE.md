@@ -156,6 +156,12 @@ finalCost = baseCost * costMultiplier
 - Level 10, 5th upgrade: `(10 + 5*5) * (1 + log(11) * 0.5) = 35 * 1.70 = 59.5 tokens`
 - Level 50, 10th upgrade: `(10 + 10*5) * (1 + log(51) * 0.5) = 60 * 2.45 = 147 tokens`
 
+### Rendering & Preload
+- A preload overlay runs before the intro and blocks start until all pre-shaded assets are prepared.
+- Pre-shaded bullet sprites: spread, rapid, basic (multiple size variants).
+- Enhanced material visuals stay until on-screen item counts hit the higher thresholds: medium at 100, low at 160, minimal at 220.
+- Once thresholds are exceeded, materials fall back to simpler spheres to protect performance.
+
 ### Upgrade Increments
 | Stat | Increment | Cap | Max Upgrades |
 |------|-----------|-----|--------------|

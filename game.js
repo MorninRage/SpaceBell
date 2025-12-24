@@ -535,6 +535,9 @@ class SpaceShooterGame {
             cutsceneCanvas: document.getElementById('cutsceneCanvas'),
             cutsceneOverlay: document.getElementById('cutsceneOverlay'),
             cutsceneText: document.getElementById('cutsceneText'),
+            preloadOverlay: document.getElementById('preloadOverlay'),
+            preloadText: document.getElementById('preloadText'),
+            preloadBarFill: document.getElementById('preloadBarFill'),
             
             // UI Panels
             craftingUI: document.getElementById('craftingUI'),
@@ -603,6 +606,11 @@ class SpaceShooterGame {
         this.ctx = this.canvas.getContext('2d');
         this.resize();
         window.addEventListener('resize', () => this.resize());
+
+        // Pre-shaded sprite cache (glows/cores pre-rendered offscreen for reuse)
+        this.preShadedSprites = {};
+        this.preloadComplete = false;
+        this.runPreload();
         
         // Track if we want to stay in fullscreen (prevents ESC from exiting)
         this.forceFullscreen = false;
@@ -1217,28 +1225,31 @@ class SpaceShooterGame {
             this.initDevMode();
         }
         
-        // Initialize cutscene
-        // In dev mode, skip the opening cutscene automatically (user can play it manually)
-        if (this.devMode) {
-            console.log('[DEV] Dev mode detected - skipping opening cutscene');
-            this.showCutscene = false;
-            this.gameState = 'playing';
-            this.cutsceneId = null; // Clear cutscene ID to prevent drawing
-            // Start main music when game begins
-            this.audio.playMusic('main', true, true);
-            // Name prompt disabled
-        } else if (this.showCutscene && this.gameState === 'cutscene') {
-            this.startCutscene();
-        } else {
-            // Skip cutscene, go straight to game
-            this.gameState = 'playing';
-            this.cutsceneId = null; // Clear cutscene ID to prevent drawing
-            // Start main music when game begins
-            this.audio.playMusic('main', true, true);
-            // Name prompt disabled
-        }
-        
-        this.gameLoop();
+        // Defer start until preload completes
+        this._startAfterPreload = () => {
+            // Initialize cutscene
+            // In dev mode, skip the opening cutscene automatically (user can play it manually)
+            if (this.devMode) {
+                console.log('[DEV] Dev mode detected - skipping opening cutscene');
+                this.showCutscene = false;
+                this.gameState = 'playing';
+                this.cutsceneId = null; // Clear cutscene ID to prevent drawing
+                // Start main music when game begins
+                this.audio.playMusic('main', true, true);
+                // Name prompt disabled
+            } else if (this.showCutscene && this.gameState === 'cutscene') {
+                this.startCutscene();
+            } else {
+                // Skip cutscene, go straight to game
+                this.gameState = 'playing';
+                this.cutsceneId = null; // Clear cutscene ID to prevent drawing
+                // Start main music when game begins
+                this.audio.playMusic('main', true, true);
+                // Name prompt disabled
+            }
+            
+            this.startGameLoop();
+        };
     }
 
     resize() {
@@ -1284,6 +1295,218 @@ class SpaceShooterGame {
             this.mouse.y = Math.max(edgeMargin, Math.min(this.canvas.height - edgeMargin, this.mouse.y));
         }
     }
+
+    runPreload() {
+        // Preload heavy visuals before gameplay so we only blit during play
+        if (this._preloadPromise) return this._preloadPromise;
+
+        const tasks = [];
+        const addTask = (name, fn) => tasks.push({ name, fn });
+
+        addTask('Bullet: Spread', () => {
+            this.preShadedSprites.spread = this.createPreShadedBulletSpriteSet({
+                name: 'spread',
+                baseRadius: 6,
+                outerGlowStops: [
+                    [0, 'rgba(156, 39, 176, 0.4)'],
+                    [0.4, 'rgba(171, 71, 188, 0.25)'],
+                    [0.7, 'rgba(156, 39, 176, 0.15)'],
+                    [1, 'rgba(156, 39, 176, 0)']
+                ],
+                bodyStops: [
+                    [0, '#ba68c8'],
+                    [0.3, '#ab47bc'],
+                    [0.7, '#9c27b0'],
+                    [1, '#7b1fa2']
+                ],
+                coreStops: [
+                    [0, 'rgba(255, 255, 255, 0.95)'],
+                    [0.4, 'rgba(233, 30, 99, 0.6)'],
+                    [1, 'rgba(156, 39, 176, 0)']
+                ],
+                variantScales: [1, 1.5, 2]
+            });
+        });
+
+        addTask('Bullet: Rapid', () => {
+            this.preShadedSprites.rapid = this.createPreShadedBulletSpriteSet({
+                name: 'rapid',
+                baseRadius: 5,
+                outerGlowStops: [
+                    [0, 'rgba(255, 193, 7, 0.4)'],
+                    [0.4, 'rgba(255, 179, 0, 0.25)'],
+                    [0.7, 'rgba(255, 160, 0, 0.15)'],
+                    [1, 'rgba(255, 152, 0, 0)']
+                ],
+                bodyStops: [
+                    [0, '#ffd54f'],
+                    [0.3, '#ffca28'],
+                    [0.7, '#ffb300'],
+                    [1, '#f57c00']
+                ],
+                coreStops: [
+                    [0, 'rgba(255, 255, 255, 0.95)'],
+                    [0.5, 'rgba(255, 193, 7, 0.5)'],
+                    [1, 'rgba(255, 193, 7, 0)']
+                ],
+                variantScales: [1, 1.5]
+            });
+        });
+
+        addTask('Bullet: Basic', () => {
+            this.preShadedSprites.basic = this.createPreShadedBulletSpriteSet({
+                name: 'basic',
+                baseRadius: 5,
+                outerGlowStops: [
+                    [0, 'rgba(79, 195, 247, 0.4)'],
+                    [0.4, 'rgba(3, 169, 244, 0.25)'],
+                    [0.7, 'rgba(2, 136, 209, 0.15)'],
+                    [1, 'rgba(2, 136, 209, 0)']
+                ],
+                bodyStops: [
+                    [0, '#4fc3f7'],
+                    [0.3, '#29b6f6'],
+                    [0.7, '#039be5'],
+                    [1, '#0277bd']
+                ],
+                coreStops: [
+                    [0, 'rgba(255, 255, 255, 0.95)'],
+                    [0.5, 'rgba(79, 195, 247, 0.5)'],
+                    [1, 'rgba(79, 195, 247, 0)']
+                ],
+                variantScales: [1, 1.5]
+            });
+        });
+
+        const total = tasks.length;
+        this.preloadProgress = 0;
+        this.preloadComplete = false;
+        this.updatePreloadUI(0, 'Preparing...');
+
+        this._preloadPromise = (async () => {
+            for (let i = 0; i < tasks.length; i++) {
+                const t = tasks[i];
+                t.fn();
+                const progress = (i + 1) / total;
+                this.preloadProgress = progress;
+                this.updatePreloadUI(progress, t.name);
+                // Yield to UI
+                await new Promise(resolve => requestAnimationFrame(resolve));
+            }
+            this.preloadComplete = true;
+            this.updatePreloadUI(1, 'Ready');
+            if (this._startAfterPreload) {
+                this._startAfterPreload();
+                this._startAfterPreload = null;
+            }
+        })().catch(err => {
+            console.warn('[Preload] Failed:', err);
+            this.preloadComplete = true; // allow game to continue even if preload fails
+            this.updatePreloadUI(1, 'Ready');
+            if (this._startAfterPreload) {
+                this._startAfterPreload();
+                this._startAfterPreload = null;
+            }
+        });
+
+        return this._preloadPromise;
+    }
+
+    startGameLoop() {
+        this.gameLoop();
+    }
+
+    createPreShadedBulletSpriteSet(options = {}) {
+        const variantScales = options.variantScales || [1];
+        const variants = variantScales.map(scale => {
+            const baseRadius = (options.baseRadius || 6) * scale;
+            return this.createPreShadedBulletSprite({ ...options, baseRadius });
+        }).filter(Boolean);
+        return { variants };
+    }
+
+    getPreShadedSprite(name, targetRadius) {
+        const entry = this.preShadedSprites?.[name];
+        if (!entry || !entry.variants || entry.variants.length === 0) return null;
+        // Pick variant with closest baseRadius to target
+        let best = entry.variants[0];
+        let bestDelta = Math.abs((targetRadius || best.baseRadius) - best.baseRadius);
+        entry.variants.forEach(variant => {
+            const delta = Math.abs((targetRadius || variant.baseRadius) - variant.baseRadius);
+            if (delta < bestDelta) {
+                best = variant;
+                bestDelta = delta;
+            }
+        });
+        return best;
+    }
+
+    updatePreloadUI(progress = 0, label = '') {
+        const pct = Math.floor(progress * 100);
+        const overlay = this._cachedElements.preloadOverlay;
+        const text = this._cachedElements.preloadText;
+        const barFill = this._cachedElements.preloadBarFill;
+        if (barFill) {
+            barFill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+        }
+        if (text) {
+            text.textContent = label ? `${label} (${pct}%)` : `Loading… ${pct}%`;
+        }
+        if (overlay && progress >= 1) {
+            overlay.style.opacity = '0';
+            setTimeout(() => {
+                overlay.style.display = 'none';
+            }, 300);
+        }
+    }
+
+    drawPreloadOverlay() {
+        // Lightweight canvas clear to avoid showing stale frames
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+
+    createPreShadedBulletSprite(options = {}) {
+        const baseRadius = options.baseRadius || 6;
+        const outerGlowRadius = options.outerGlowRadius || baseRadius * 3.2;
+        const size = Math.ceil(outerGlowRadius * 2 + 4); // pad a bit to avoid clipping
+
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Outer glow
+        const outerGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, outerGlowRadius);
+        (options.outerGlowStops || []).forEach(([stop, color]) => outerGlow.addColorStop(stop, color));
+        ctx.fillStyle = outerGlow;
+        ctx.beginPath();
+        ctx.arc(cx, cy, outerGlowRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Main body
+        const bodyRadius = baseRadius;
+        const bodyGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, bodyRadius);
+        (options.bodyStops || []).forEach(([stop, color]) => bodyGrad.addColorStop(stop, color));
+        ctx.fillStyle = bodyGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, bodyRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Core
+        const coreRadius = baseRadius * 0.55;
+        const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreRadius);
+        (options.coreStops || []).forEach(([stop, color]) => coreGrad.addColorStop(stop, color));
+        ctx.fillStyle = coreGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, coreRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        return { canvas, size, baseRadius };
+    }
+
 
     setupEventListeners() {
         // Mode buttons
@@ -5181,12 +5404,11 @@ class SpaceShooterGame {
     }
     
     getResourceRenderQuality() {
-        const thresholds = this.resourceQualityThresholds || { medium: 50, low: 80, minimal: 110 };
+        const thresholds = this.resourceQualityThresholds || { medium: 100, low: 160, minimal: 220 };
         const count = this.items.length;
-        const level = this.level || 1;
-        if (count >= thresholds.minimal || level >= 180) return 'minimal';
-        if (count >= thresholds.low || level >= 150) return 'low';
-        if (count >= thresholds.medium || level >= 120) return 'medium';
+        if (count >= thresholds.minimal) return 'minimal';
+        if (count >= thresholds.low) return 'low';
+        if (count >= thresholds.medium) return 'medium';
         return 'high';
     }
     
@@ -11556,6 +11778,13 @@ class SpaceShooterGame {
     }
 
     draw() {
+        // Preload overlay: hold draw loop until ready
+        if (!this.preloadComplete) {
+            this.drawPreloadOverlay();
+            requestAnimationFrame(() => this.gameLoop());
+            return;
+        }
+
         // Draw cutscene if active
         if (this.gameState === 'cutscene') {
             // Debug: Log first draw call for cutscene
@@ -20776,7 +21005,7 @@ class SpaceShooterGame {
                 }
                 return;
             }
-            
+
             this.ctx.save();
             this.ctx.translate(item.x, item.y);
             
@@ -23020,17 +23249,57 @@ class SpaceShooterGame {
                 const bulletSize = bullet.size || 5;
                 const angle = Math.atan2(bullet.vy, bullet.vx);
                 
-                // Outer energy field glow - purple/magenta
-                const outerGlow = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 3.2);
-                outerGlow.addColorStop(0, 'rgba(156, 39, 176, 0.4)');
-                outerGlow.addColorStop(0.4, 'rgba(171, 71, 188, 0.25)');
-                outerGlow.addColorStop(0.7, 'rgba(156, 39, 176, 0.15)');
-                outerGlow.addColorStop(1, 'rgba(156, 39, 176, 0)');
-                this.ctx.fillStyle = outerGlow;
-                this.ctx.beginPath();
-                this.ctx.arc(bullet.x, bullet.y, bulletSize * 3.2, 0, Math.PI * 2);
-                this.ctx.fill();
-                
+                // Pre-shaded sprite (outer glow + body + core) to avoid per-bullet gradients
+                const spreadSprite = this.getPreShadedSprite('spread', bulletSize);
+                if (spreadSprite && spreadSprite.canvas) {
+                    const scale = bulletSize / spreadSprite.baseRadius;
+                    const drawSize = spreadSprite.size * scale;
+                    this.ctx.drawImage(
+                        spreadSprite.canvas,
+                        bullet.x - drawSize / 2,
+                        bullet.y - drawSize / 2,
+                        drawSize,
+                        drawSize
+                    );
+                } else {
+                    // Fallback: draw gradients directly if sprite cache is unavailable
+                    // Outer energy field glow - purple/magenta
+                    const outerGlow = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 3.2);
+                    outerGlow.addColorStop(0, 'rgba(156, 39, 176, 0.4)');
+                    outerGlow.addColorStop(0.4, 'rgba(171, 71, 188, 0.25)');
+                    outerGlow.addColorStop(0.7, 'rgba(156, 39, 176, 0.15)');
+                    outerGlow.addColorStop(1, 'rgba(156, 39, 176, 0)');
+                    this.ctx.fillStyle = outerGlow;
+                    this.ctx.beginPath();
+                    this.ctx.arc(bullet.x, bullet.y, bulletSize * 3.2, 0, Math.PI * 2);
+                    this.ctx.fill();
+
+                    // Main bullet body with purple gradient
+                    const bulletGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize);
+                    bulletGradient.addColorStop(0, '#ba68c8'); // Bright purple center
+                    bulletGradient.addColorStop(0.3, '#ab47bc'); // Medium purple
+                    bulletGradient.addColorStop(0.7, '#9c27b0'); // Standard purple
+                    bulletGradient.addColorStop(1, '#7b1fa2'); // Dark purple edge
+                    this.ctx.fillStyle = bulletGradient;
+                    // OPTIMIZED: Reduced shadow blur
+                    this.ctx.shadowBlur = 10;
+                    this.ctx.shadowColor = 'rgba(156, 39, 176, 0.7)';
+                    this.ctx.beginPath();
+                    this.ctx.arc(bullet.x, bullet.y, bulletSize, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    this.ctx.shadowBlur = 0;
+
+                    // Inner bright core - white to purple
+                    const coreGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 0.55);
+                    coreGradient.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
+                    coreGradient.addColorStop(0.4, 'rgba(233, 30, 99, 0.6)'); // Pink-purple
+                    coreGradient.addColorStop(1, 'rgba(156, 39, 176, 0)');
+                    this.ctx.fillStyle = coreGradient;
+                    this.ctx.beginPath();
+                    this.ctx.arc(bullet.x, bullet.y, bulletSize * 0.55, 0, Math.PI * 2);
+                    this.ctx.fill();
+                }
+
                 // Pulsing outer ring - spread pattern effect
                 const pulsePhase = Math.sin(time * 3.5) * 0.3 + 0.7;
                 this.ctx.strokeStyle = `rgba(186, 104, 200, ${0.7 * pulsePhase})`;
@@ -23041,31 +23310,6 @@ class SpaceShooterGame {
                 this.ctx.arc(bullet.x, bullet.y, bulletSize + 4, 0, Math.PI * 2);
                 this.ctx.stroke();
                 this.ctx.shadowBlur = 0;
-                
-                // Main bullet body with purple gradient
-                const bulletGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize);
-                bulletGradient.addColorStop(0, '#ba68c8'); // Bright purple center
-                bulletGradient.addColorStop(0.3, '#ab47bc'); // Medium purple
-                bulletGradient.addColorStop(0.7, '#9c27b0'); // Standard purple
-                bulletGradient.addColorStop(1, '#7b1fa2'); // Dark purple edge
-                this.ctx.fillStyle = bulletGradient;
-                // OPTIMIZED: Reduced shadow blur
-                this.ctx.shadowBlur = 10;
-                this.ctx.shadowColor = 'rgba(156, 39, 176, 0.7)';
-                this.ctx.beginPath();
-                this.ctx.arc(bullet.x, bullet.y, bulletSize, 0, Math.PI * 2);
-                this.ctx.fill();
-                this.ctx.shadowBlur = 0;
-                
-                // Inner bright core - white to purple
-                const coreGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 0.55);
-                coreGradient.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
-                coreGradient.addColorStop(0.4, 'rgba(233, 30, 99, 0.6)'); // Pink-purple
-                coreGradient.addColorStop(1, 'rgba(156, 39, 176, 0)');
-                this.ctx.fillStyle = coreGradient;
-                this.ctx.beginPath();
-                this.ctx.arc(bullet.x, bullet.y, bulletSize * 0.55, 0, Math.PI * 2);
-                this.ctx.fill();
                 
                 // Enhanced energy trail - wider for spread effect
                 const trailLength = 22;

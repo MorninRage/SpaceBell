@@ -804,6 +804,37 @@
             max-width: 500px;
         }
         
+        /* Ensure cursor is visible in level-up menu */
+        body.level-up #gameCanvas {
+            cursor: default !important;
+        }
+        
+        body.level-up #craftingUI,
+        body.level-up #shopUI {
+            cursor: default !important;
+        }
+        
+        body.level-up #craftingUI *,
+        body.level-up #shopUI * {
+            cursor: pointer !important;
+        }
+        
+        body.level-up #craftingUI .craft-btn,
+        body.level-up #shopUI .shop-btn,
+        body.level-up #craftingUI .craft-btn:not([disabled]),
+        body.level-up #shopUI .shop-btn:not([disabled]) {
+            cursor: pointer !important;
+        }
+        
+        body.level-up #craftingUI .craft-btn:disabled,
+        body.level-up #shopUI .shop-btn:disabled {
+            cursor: not-allowed !important;
+        }
+        
+        body.level-up #levelUpContinueUI button {
+            cursor: pointer !important;
+        }
+        
         /* Enhanced Level Up Continue Button */
         #levelUpContinueUI {
             position: fixed;

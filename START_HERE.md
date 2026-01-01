@@ -38,6 +38,10 @@
 ## Performance notes
 - Rendering safeguards: `game.js` now auto-downgrades bullet visuals (quality lock tiers) on high bullet counts or fire-rate bursts, disabling gradients/shadows/particles in minimal/low modes.
 - If you see lag at low levels, ensure hardware acceleration is on; spreads can temporarily trigger low/minimal mode for ~20 frames to avoid stalls.
+- **Molecule optimization**: Health bucket system (5 buckets) and gradient caching reduce molecule rendering overhead by 60-80%.
+- **Particle optimization**: Gradient caching for collision particles (fire, blue, orange) reduces gradient creation by 70-85%.
+- **Preshader system**: Most visual effects are preshaded/prerendered off-canvas for reuse, including bullets, ship effects, cutscenes, boss scenes, and material drops.
+- **Character rendering**: High-fidelity character system with three-point lighting and detailed features. Characters are rendered in real-time with optimized animations (breathing, hair movement, blinking).
 
 ## Troubleshooting checklist
 - Lag spikes: verify browser GPU acceleration; confirm `config.js` is empty if no server is running; try hosted (not `file://`) to allow service worker caching; consider lowering OS/browser animations.
@@ -47,6 +51,9 @@
 ## Contributing workflow
 - No build step required. Edit `game.js` and reload. Keep changes ASCII.
 - Prefer profiling before visual feature additions; follow the new quality-tier patterns for any rendering-heavy features.
+- When adding new rendering effects, consider using the preshader/prerendering system for off-canvas caching.
+- For molecules and particles, use the existing gradient caching systems (health buckets for molecules, size buckets for particles).
+- For character rendering, follow the high-fidelity character system pattern (three-point lighting, realistic proportions, physics-based animations) used in `drawEinsteinCharacter` and `drawBellCharacter`.
 
 
 

@@ -899,6 +899,37 @@
             max-width: 500px;
         }
         
+        /* Ensure cursor is visible in level-up menu */
+        body.level-up #gameCanvas {
+            cursor: default !important;
+        }
+        
+        body.level-up #craftingUI,
+        body.level-up #shopUI {
+            cursor: default !important;
+        }
+        
+        body.level-up #craftingUI *,
+        body.level-up #shopUI * {
+            cursor: pointer !important;
+        }
+        
+        body.level-up #craftingUI .craft-btn,
+        body.level-up #shopUI .shop-btn,
+        body.level-up #craftingUI .craft-btn:not([disabled]),
+        body.level-up #shopUI .shop-btn:not([disabled]) {
+            cursor: pointer !important;
+        }
+        
+        body.level-up #craftingUI .craft-btn:disabled,
+        body.level-up #shopUI .shop-btn:disabled {
+            cursor: not-allowed !important;
+        }
+        
+        body.level-up #levelUpContinueUI button {
+            cursor: pointer !important;
+        }
+        
         /* When both crafting and shop are active (level-up), position them side by side */
         body.level-up #craftingUI.active {
             left: 25%;
@@ -1723,7 +1754,7 @@
         <div class="dev-section">
             <h3>Level Control</h3>
             <label>Jump to Level:</label>
-            <input type="number" id="devLevelInput" min="1" value="1">
+            <input type="number" id="devLevelInput" min="1" value="1" style="width: 100px; padding: 5px; margin: 5px 0;">
             <button onclick="window.game?.devSetLevel()">Go to Level</button>
             <button onclick="window.game?.devNextLevel()">Next Level</button>
             <button onclick="window.game?.devPrevLevel()">Previous Level</button>
@@ -1764,7 +1795,22 @@
                 <option value="2">Boss 2: DNA Helix (Level 30)</option>
                 <option value="3">Boss 3: Protein Complex (Level 45)</option>
                 <option value="4">Boss 4: Cell Membrane (Level 60)</option>
-                <option value="5">Boss 5+: Advanced (Level 75+)</option>
+                <option value="5">Boss 5: Advanced (Level 75)</option>
+                <option value="6">Boss 6: Advanced (Level 90)</option>
+                <option value="7">Boss 7: Advanced (Level 105)</option>
+                <option value="8">Boss 8: Advanced (Level 120)</option>
+                <option value="9">Boss 9: Advanced (Level 135)</option>
+                <option value="10">Boss 10: Advanced (Level 150)</option>
+                <option value="11">Boss 11: Advanced (Level 165)</option>
+                <option value="12">Boss 12: Advanced (Level 180)</option>
+                <option value="13">Boss 13: Advanced (Level 195)</option>
+                <option value="14">Boss 14: Advanced (Level 210)</option>
+                <option value="15">Boss 15: Advanced (Level 225)</option>
+                <option value="16">Boss 16: Advanced (Level 240)</option>
+                <option value="17">Boss 17: Advanced (Level 255)</option>
+                <option value="18">Boss 18: Advanced (Level 270)</option>
+                <option value="19">Boss 19: Advanced (Level 285)</option>
+                <option value="20">Boss 20: Advanced (Level 300)</option>
             </select>
             <button onclick="window.game?.devSpawnSpecificBoss()">Spawn Selected Boss</button>
             <button onclick="window.game?.devSpawnBoss()">Spawn Current Boss</button>

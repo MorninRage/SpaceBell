@@ -1,4 +1,4 @@
-// Beyond Bell: Full Space Shooter Game
+﻿// Beyond Bell: Full Space Shooter Game
 // With Levels, Crafting, RPG Elements, and Survival Mechanics
 
 // Audio Manager Class - Handles all game audio using HTML5 Audio (works with file://)
@@ -21,6 +21,22 @@ class AudioManager {
         // Audio element cache
         this.audioElements = {};
         
+        // Track all created audio elements for dev mode cleanup
+        this.allCreatedAudioElements = new Set();
+
+        // Music session guard to prevent overlapping starts
+        this._musicSessionId = 0;
+        this._activeMusicSession = 0;
+
+        // Dev-mode single music element (ensures only one Audio exists)
+        this._devSingleMusicEl = null;
+
+        // Dev wiring (supplied by game)
+        this.devMode = false;
+        this._devAllowMusicStart = false;
+        this._devAllowMusicStartGetter = null;
+        this._stopAllMusicFn = null;
+        
         // Failed file cache - prevents repeated attempts to load missing files
         this.failedFiles = new Set();
         
@@ -33,7 +49,7 @@ class AudioManager {
         
         // Initialized flag
         this.audioInitialized = false; // Will be set to true when init() is called
-        
+
         
         // Background music tracks
         // If files don't exist, procedural music will be generated automatically
@@ -114,6 +130,13 @@ class AudioManager {
         this.audioInitialized = true;
         console.log('Audio system initialized (HTML5 Audio)');
     }
+
+    // Provide dev-mode context so AudioManager can honor single-track guard
+    setDevContext({ isDev = false, allowMusicStartGetter = null, stopAllMusicFn = null } = {}) {
+        this.devMode = isDev;
+        this._devAllowMusicStartGetter = allowMusicStartGetter;
+        this._stopAllMusicFn = stopAllMusicFn;
+    }
     
     // Update all volume levels
     updateVolumes() {
@@ -124,6 +147,14 @@ class AudioManager {
         
         // Note: Individual SFX/Voice elements are created fresh each time,
         // so they'll use the updated volumes automatically
+    }
+
+    // Bump music session to invalidate in-flight starts
+    bumpMusicSession() {
+        if (this.audio && typeof this.audio.bumpMusicSession === 'function') {
+            this.audio.bumpMusicSession();
+        }
+        return this._activeMusicSession;
     }
     
     // Set volume for a specific channel
@@ -220,37 +251,178 @@ class AudioManager {
         }
     }
     
+    // Hard-stop and remove any music elements still alive (safety for dev jumps)
+    purgeAllMusicElements() {
+        try {
+            if (this.allCreatedAudioElements && this.allCreatedAudioElements.size > 0) {
+                this.allCreatedAudioElements.forEach(audio => {
+                    try {
+                        audio.volume = 0;
+                        audio.pause();
+                        audio.currentTime = 0;
+                        audio.onended = null;
+                        audio.onplay = null;
+                        audio.oncanplaythrough = null;
+                        audio.onloadeddata = null;
+                        audio.onerror = null;
+                        audio.src = '';
+                        try { audio.load(); } catch (e) {}
+                        if (audio.parentNode) {
+                            audio.parentNode.removeChild(audio);
+                        }
+                    } catch (e) {
+                        console.warn('[Audio] Error purging tracked music element:', e);
+                    }
+                });
+                this.allCreatedAudioElements.clear();
+            }
+            
+            const domAudio = document.querySelectorAll('audio');
+            domAudio.forEach(audio => {
+                try {
+                    const src = audio.src || audio.getAttribute('src') || '';
+                    const isMusic = src.includes('music') || src.includes('main_theme') || src.includes('galactic_rap') ||
+                                    audio.dataset.isMusic === 'true' || audio.dataset.channel === 'music' || src.includes('/music/');
+                    if (isMusic) {
+                        audio.volume = 0;
+                        audio.pause();
+                        audio.currentTime = 0;
+                        audio.onended = null;
+                        audio.onplay = null;
+                        audio.oncanplaythrough = null;
+                        audio.onloadeddata = null;
+                        audio.onerror = null;
+                        audio.src = '';
+                        try { audio.load(); } catch (e) {}
+                        if (audio.parentNode) {
+                            audio.parentNode.removeChild(audio);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[Audio] Error purging DOM music element:', e);
+                }
+            });
+        } catch (e) {
+            console.warn('[Audio] purgeAllMusicElements failed:', e);
+        }
+    }
+    
     // Play background music with seamless crossfade between tracks
-    playMusic(trackName, loop = true, fadeIn = true) {
+    playMusic(trackName, loop = true, fadeIn = true, forceRestart = false) {
         const url = this.musicTracks[trackName];
         if (!url) {
             console.warn(`Music track not found: ${trackName}`);
             return;
         }
-        
-        // If same track is already playing, don't restart
-        if (this.currentMusic === trackName && this.currentMusicElement) {
+
+        // In dev mode, only allow music start if explicitly allowed by dev guard
+        const devAllowStart = this._devAllowMusicStartGetter ? this._devAllowMusicStartGetter() : this._devAllowMusicStart;
+        if (this.devMode && !devAllowStart) {
             return;
         }
+
+        // Bump session so any prior starts are invalid
+        const session = ++this._musicSessionId;
+        this._activeMusicSession = session;
+
+        // Dev mode: single-element music, no crossfade, force restart
+        if (this.devMode) {
+            try {
+                if (this._stopAllMusicFn) {
+                    this._stopAllMusicFn('dev-play-hard-reset', false, true);
+                }
+                this.purgeAllMusicElements();
+            } catch (e) {}
+            this.pendingMusic = null;
+            if (!this._devSingleMusicEl) {
+                this._devSingleMusicEl = new Audio();
+                this._devSingleMusicEl.dataset.isMusic = 'true';
+                this._devSingleMusicEl.dataset.channel = 'music';
+            }
+            const el = this._devSingleMusicEl;
+            try { el.pause(); } catch (e) {}
+            el.src = url;
+            el.loop = loop;
+            el.volume = this.getMusicVolume();
+            el.currentTime = 0;
+            try { el.load(); } catch (e) {}
+            el.onended = null;
+            this.currentMusicElement = el;
+            this.currentMusic = trackName;
+            this.allCreatedAudioElements.add(el);
+            el.play().catch(() => {});
+            return;
+        }
+
+        // If forceRestart is true, stop and clear any existing music first
+        if (forceRestart) {
+            this.pendingMusic = null; // clear any pending autoplay restart
+            this.purgeAllMusicElements();
+            console.log(`[Audio] Force restart requested - stopping all existing music`);
+            // Stop current music element
+            if (this.currentMusicElement) {
+                this.currentMusicElement.pause();
+                this.currentMusicElement.currentTime = 0;
+                try {
+                    this.currentMusicElement.load();
+                } catch (e) {}
+                // Remove from DOM if it exists
+                if (this.currentMusicElement.parentNode) {
+                    this.currentMusicElement.parentNode.removeChild(this.currentMusicElement);
+                }
+                this.currentMusicElement = null;
+            }
+            this.currentMusic = null;
+            
+            // Also stop any other music elements
+            const allMusicElements = document.querySelectorAll('audio[data-is-music="true"], audio[src*="music"], audio[src*="main_theme"], audio[src*="galactic_rap"]');
+            allMusicElements.forEach(audio => {
+                audio.pause();
+                audio.currentTime = 0;
+                try {
+                    audio.load();
+                } catch (e) {}
+                if (audio.parentNode) {
+                    audio.parentNode.removeChild(audio);
+                }
+            });
+        }
         
-        console.log(`[Audio] Playing music: ${trackName} from ${url}`);
+        // If same track is already playing, don't restart (unless forced)
+        if (!forceRestart && this.currentMusic === trackName && this.currentMusicElement) {
+            // Check if the element is actually playing
+            if (!this.currentMusicElement.paused) {
+                return;
+            }
+        }
+        
+        console.log(`[Audio] Playing music: ${trackName} from ${url}${forceRestart ? ' (forced restart)' : ''}`);
         
         // Seamless crossfade: fade out current music while fading in new music
-        if (this.currentMusicElement) {
-            this.crossfadeToNewTrack(url, loop, fadeIn);
+        // Skip crossfade if forceRestart is true OR if currentMusicElement is null OR devMode is active
+        const allowCrossfade = this.currentMusicElement && !forceRestart && !this.devMode;
+        if (allowCrossfade) {
+            this.crossfadeToNewTrack(url, loop, fadeIn, session);
         } else {
-            this.startMusic(url, loop, fadeIn);
+            // Ensure we start fresh
+            this.currentMusicElement = null;
+            this.startMusic(url, loop, fadeIn, session);
         }
         
         this.currentMusic = trackName;
     }
     
     // Crossfade from current track to new track (seamless transition)
-    crossfadeToNewTrack(newUrl, loop, fadeIn) {
+    crossfadeToNewTrack(newUrl, loop, fadeIn, session) {
         const oldAudio = this.currentMusicElement;
         const crossfadeDuration = 3.0; // 3 seconds crossfade
         // Create new audio element
         const newAudio = new Audio(newUrl);
+        newAudio.dataset.musicSession = session;
+        // Track this audio element for dev mode cleanup
+        if (this.allCreatedAudioElements) {
+            this.allCreatedAudioElements.add(newAudio);
+        }
         newAudio.preload = 'auto';
         newAudio.volume = 0; // Start at 0
         newAudio.loop = loop;
@@ -261,6 +433,11 @@ class AudioManager {
         
         // Wait for new track to be ready
         const startCrossfade = () => {
+            // If session is stale, abort
+            if (session !== this._activeMusicSession) {
+                return;
+            }
+
             // Start playing new track at volume 0
             newAudio.play().catch(e => {
                 console.warn('[Audio] Autoplay blocked during crossfade:', e);
@@ -273,6 +450,16 @@ class AudioManager {
                 const elapsed = (Date.now() - startTime) / 1000;
                 const progress = Math.min(1.0, elapsed / crossfadeDuration);
                 
+                // If session is stale mid-fade, stop both and exit
+                if (session !== this._activeMusicSession) {
+                    clearInterval(fadeInterval);
+                    try { newAudio.pause(); newAudio.remove(); } catch (e) {}
+                    if (oldAudio) {
+                        try { oldAudio.pause(); oldAudio.remove(); } catch (e) {}
+                    }
+                    return;
+                }
+
                 if (oldAudio && oldAudio.parentNode !== null) {
                     // Fade out old track
                     oldAudio.volume = targetVolume * (1 - progress);
@@ -284,6 +471,13 @@ class AudioManager {
                 // When crossfade complete
                 if (progress >= 1.0) {
                     clearInterval(fadeInterval);
+                    if (session !== this._activeMusicSession) {
+                        try { newAudio.pause(); newAudio.remove(); } catch (e) {}
+                        if (oldAudio) {
+                            try { oldAudio.pause(); oldAudio.remove(); } catch (e) {}
+                        }
+                        return;
+                    }
                     // Stop and remove old track
                     if (oldAudio) {
                         oldAudio.pause();
@@ -307,14 +501,25 @@ class AudioManager {
     }
     
     // Start playing music with seamless looping
-    startMusic(url, loop, fadeIn) {
+    startMusic(url, loop, fadeIn, session) {
         try {
             console.log(`[Audio] Creating audio element for: ${url}`);
             const audio = new Audio(url);
+            audio.dataset.musicSession = session;
+            // Track this audio element for dev mode cleanup
+            if (this.allCreatedAudioElements) {
+                this.allCreatedAudioElements.add(audio);
+            }
             audio.preload = 'auto';
-            // Set initial volume - if looping with fadeIn, seamless loop will handle it
-            // Otherwise, set volume based on fadeIn parameter
-            audio.volume = (fadeIn && loop) ? 0 : (fadeIn ? 0 : this.getMusicVolume());
+            // Set initial volume - if fadeIn is false, start at full volume immediately
+            // If fadeIn is true and looping, seamless loop will handle the fade-in
+            if (fadeIn && loop) {
+                audio.volume = 0; // Seamless loop will fade in
+            } else if (fadeIn && !loop) {
+                audio.volume = 0; // Will fade in manually
+            } else {
+                audio.volume = this.getMusicVolume(); // Start at full volume immediately
+            }
             audio.dataset.isMusic = 'true';
             
             // Add error handlers
@@ -343,6 +548,12 @@ class AudioManager {
             
             // Wait for audio to be ready before playing
             const startPlaying = () => {
+                // Abort if session is stale
+                if (session !== this._activeMusicSession) {
+                    try { audio.pause(); audio.remove(); } catch (e) {}
+                    return;
+                }
+
                 // For initial fade-in, the seamless loop system handles it if looping
                 // For non-looping tracks, use quick fade-in
                 if (fadeIn && !loop) {
@@ -352,7 +563,7 @@ class AudioManager {
                     let currentVolume = 0;
                     
                     const fadeInterval = setInterval(() => {
-                        if (!this.currentMusicElement || this.currentMusicElement !== audio) {
+                        if (session !== this._activeMusicSession || !this.currentMusicElement || this.currentMusicElement !== audio) {
                             clearInterval(fadeInterval);
                             return;
                         }
@@ -609,6 +820,15 @@ class SpaceShooterGame {
 
         // Pre-shaded sprite cache (glows/cores pre-rendered offscreen for reuse)
         this.preShadedSprites = {};
+
+        // Molecule optimization caches (health buckets + gradient caching)
+        this.moleculeGradientCache = {}; // Cached gradients by health bucket
+        this.moleculeHealthBuckets = [1.0, 0.75, 0.5, 0.25, 0.1]; // Health bucket thresholds
+        this.moleculeCacheInitialized = false;
+        
+        // Particle optimization caches (gradient caching for collision effects)
+        this.particleGradientCache = {}; // Cached gradients by particle type and size
+        this.particleSizeBuckets = [2, 4, 6, 8, 12, 16]; // Common particle sizes for caching
         this.preloadComplete = false;
         this.runPreload();
         
@@ -643,6 +863,7 @@ class SpaceShooterGame {
         this.devShowDebug = false;
         this.devSpeedMultiplier = 1.0;
         this.showBossDebugOverlay = false; // UI-only overlay, off by default
+        this._devAllowMusicStart = false;
         
         if (this.devMode) {
             console.log('[DEV] ========================================');
@@ -678,6 +899,11 @@ class SpaceShooterGame {
         
         // Audio Manager
         this.audio = new AudioManager();
+        this.audio.setDevContext({
+            isDev: this.devMode,
+            allowMusicStartGetter: () => this._devAllowMusicStart,
+            stopAllMusicFn: (reason, block, purge) => this.stopAllMusic(reason, block, purge)
+        });
         
         // Initialize audio on first user interaction
         const initAudioOnInteraction = (e) => {
@@ -703,9 +929,10 @@ class SpaceShooterGame {
             }
             
             // If game is already playing and music should be playing, try to start it
-            if (this.gameState === 'playing' && this.audio.currentMusic === 'main' && !this.audio.currentMusicElement) {
+            if (this.gameState === 'playing' && !this.cutsceneId && !this.isPaused &&
+                this.audio.currentMusic === 'main' && !this.audio.currentMusicElement) {
                 console.log('[Audio] Restarting main music after user interaction');
-                this.audio.playMusic('main', true, true);
+                this.startMainMusicIfAllowed({ fadeIn: true });
             }
             
             document.removeEventListener('click', initAudioOnInteraction);
@@ -731,6 +958,14 @@ class SpaceShooterGame {
             framesRemaining: 0,
             targetDeltaTime: 0.016 // Target 60fps
         };
+
+        // Dev music guard - blocks auto music restarts until explicitly allowed
+        this._devMusicBlocked = false;
+        // Dev level control flag to suppress level-up/cutscene triggers
+        this._devLevelControlActive = false;
+        // Pending main-music restart (used if autoplay blocks immediate play)
+        this._devPendingMain = null;
+        this._devPendingMainHandler = null;
 
         // Render throttling / caches
         this._frameSkipToggle = false; // simple toggle to skip heavy draws every other frame
@@ -762,7 +997,7 @@ class SpaceShooterGame {
         // Cutscene state
         this.cutsceneTime = 0;
         this.cutscenePhase = 0; // Phase within current cutscene
-        this.cutsceneId = 'intro'; // Intro plays first, then opening
+        this.cutsceneId = 'willsWayIntro'; // New intro: Will's-Way-Studios → SpaceBell interactive → preshading → existing intro
         this.awaitingOpeningCutscene = false; // After intro, wait for ESC to start the opening cutscene
         this.cutscenesShown = JSON.parse(localStorage.getItem('cutscenesShown') || '[]'); // Track which cutscenes have been shown
         this.cutsceneIsManual = false; // Track if cutscene was triggered manually (dev mode) vs automatically (level progression)
@@ -881,7 +1116,7 @@ class SpaceShooterGame {
             resetTime: 0,
             orbs: [],
             completedCount: 0, // how many times the Neurokey puzzle was completed (drives difficulty)
-            revealEnd: 0,      // when the current active target’s bright reveal ends
+            revealEnd: 0,      // when the current active targetâ€™s bright reveal ends
             expireAt: 0,       // when the current active target times out and sequence resets
             cooldownUntil: 0,  // when the next puzzle sequence can start after a completion
             totalEnd: 0,       // end of the overall puzzle window
@@ -899,11 +1134,11 @@ class SpaceShooterGame {
             weapons: {
                 basic: { quantumParticles: 1, crystals: 1, metalScraps: 1 }, // Starter weapon - low cost for repairs
                 rapid: { quantumParticles: 8, crystals: 5, energyCores: 2 }, // Increased cost - early tier but more expensive
-                spread: { quantumParticles: 12, crystals: 8, energyCores: 3, metalScraps: 2 }, // Increased cost - early-mid tier
                 laser: { quantumParticles: 18, crystals: 12, energyCores: 6, metalScraps: 4 }, // Increased cost - mid tier
                 automatic: { quantumParticles: 25, crystals: 18, metalScraps: 8, energyCores: 8 }, // Increased cost - late tier
                 // High-tier weapons based on Einstein's individual system physics
                 transformationPredictor: { quantumParticles: 120, crystals: 100, energyCores: 80, metalScraps: 60, tokens: 50 }, // Predicts exact transformation times - very high tier
+                spread: { quantumParticles: 12, crystals: 8, energyCores: 3, metalScraps: 2 }, // Increased cost - early-mid tier (unlocks at level 40)
                 deterministicEngine: { quantumParticles: 180, crystals: 150, energyCores: 120, metalScraps: 100, tokens: 80 }, // Complete individual system description - ultra high tier
                 individualSystemCore: { quantumParticles: 250, crystals: 200, energyCores: 180, metalScraps: 150, tokens: 120 } // Individual system bypass technology - highest tier
             },
@@ -936,30 +1171,31 @@ class SpaceShooterGame {
             },
             ships: {
                 basic: { quantumParticles: 2, crystals: 1, metalScraps: 2 }, // Starter ship - low cost for repairs
-                fast: { quantumParticles: 5, crystals: 3, metalScraps: 5 }, // Early tier
-                rapid: { quantumParticles: 12, crystals: 8, metalScraps: 6, energyCores: 3 }, // Enhanced rapid ship - mid-late tier
-                tank: { quantumParticles: 8, crystals: 5, metalScraps: 8 }, // Mid tier
-                agile: { quantumParticles: 10, crystals: 5, metalScraps: 5, energyCores: 2 }, // Late tier
+                tank: { quantumParticles: 8, crystals: 5, metalScraps: 8 }, // Mid tier (unlocks at level 2)
+                fast: { quantumParticles: 5, crystals: 3, metalScraps: 5 }, // Early tier (unlocks at level 3)
+                agile: { quantumParticles: 10, crystals: 5, metalScraps: 5, energyCores: 2 }, // Late tier (unlocks at level 4)
+                rapid: { quantumParticles: 12, crystals: 8, metalScraps: 6, energyCores: 3 }, // Enhanced rapid ship - mid-late tier (unlocks at level 5)
                 // High-tier ships based on Einstein's individual system physics
-                individualStabilizer: { quantumParticles: 100, crystals: 80, energyCores: 60, metalScraps: 50, tokens: 40 }, // Stabilizes individual systems - high tier
-                completeDescriptionVessel: { quantumParticles: 180, crystals: 150, energyCores: 120, metalScraps: 100, tokens: 80 } // Complete individual system vessel - ultra high tier
+                individualStabilizer: { quantumParticles: 100, crystals: 80, energyCores: 60, metalScraps: 50, tokens: 40 }, // Stabilizes individual systems - high tier (unlocks at level 35)
+                timeDecayAtomicVessel: { quantumParticles: 140, crystals: 115, energyCores: 90, metalScraps: 75, tokens: 60 }, // Time decay atomic vessel - mid-high tier (unlocks at level 47)
+                completeDescriptionVessel: { quantumParticles: 180, crystals: 150, energyCores: 120, metalScraps: 100, tokens: 80 } // Complete individual system vessel - ultra high tier (unlocks at level 60)
             },
             shields: {
-                basic: { quantumParticles: 3, crystals: 2, metalScraps: 3 }, // Early tier
-                reinforced: { quantumParticles: 6, crystals: 4, metalScraps: 5 }, // Mid tier
-                quantum: { quantumParticles: 15, crystals: 10, energyCores: 5, metalScraps: 8 }, // Late tier - best shield (more expensive)
+                basic: { quantumParticles: 3, crystals: 2, metalScraps: 3 }, // Early tier (unlocks at level 1)
+                reinforced: { quantumParticles: 6, crystals: 4, metalScraps: 5 }, // Mid tier (unlocks at level 5)
+                quantum: { quantumParticles: 15, crystals: 10, energyCores: 5, metalScraps: 8 }, // Late tier - best shield (unlocks at level 20)
                 // High-tier shields based on Einstein's individual system physics
-                ontologicalReality: { quantumParticles: 120, crystals: 100, energyCores: 80, metalScraps: 60, tokens: 50 }, // Makes wave function ontological - high tier
-                individualSystemBarrier: { quantumParticles: 200, crystals: 180, energyCores: 150, metalScraps: 120, tokens: 100 } // Complete individual system protection - ultra high tier
+                ontologicalReality: { quantumParticles: 120, crystals: 100, energyCores: 80, metalScraps: 60, tokens: 50 }, // Makes wave function ontological - high tier (unlocks at level 40)
+                individualSystemBarrier: { quantumParticles: 200, crystals: 180, energyCores: 150, metalScraps: 120, tokens: 100 } // Complete individual system protection - ultra high tier (unlocks at level 70)
             },
             upgrades: {
                 targetingComputer: { quantumParticles: 15, crystals: 10, energyCores: 5, metalScraps: 8 }, // Late game - enables crosshair
-                autoCollector: { quantumParticles: 25, crystals: 20, energyCores: 10, metalScraps: 15 }, // Late game - attracts all items
                 // High-tier upgrades based on Einstein's individual system physics
-                completeDescriptionMatrix: { quantumParticles: 150, crystals: 120, energyCores: 100, metalScraps: 80, tokens: 60 }, // Completes QM description for individual systems - high tier
-                ensembleBypass: { quantumParticles: 250, crystals: 200, energyCores: 180, metalScraps: 150, tokens: 120 }, // Sidesteps ensemble limitations - ultra high tier
-                transformationTimeScanner: { quantumParticles: 180, crystals: 150, energyCores: 120, metalScraps: 100, tokens: 80 }, // Scans exact transformation times (radioactive atom model) - high tier
-                individualSystemAmplifier: { quantumParticles: 300, crystals: 250, energyCores: 220, metalScraps: 200, tokens: 150 } // Amplifies individual system properties - highest tier
+                completeDescriptionMatrix: { quantumParticles: 150, crystals: 120, energyCores: 100, metalScraps: 80, tokens: 60 }, // Completes QM description for individual systems - high tier (unlocks at level 35)
+                transformationTimeScanner: { quantumParticles: 180, crystals: 150, energyCores: 120, metalScraps: 100, tokens: 80 }, // Scans exact transformation times (radioactive atom model) - high tier (unlocks at level 40)
+                ensembleBypass: { quantumParticles: 250, crystals: 200, energyCores: 180, metalScraps: 150, tokens: 120 }, // Sidesteps ensemble limitations - ultra high tier (unlocks at level 65)
+                autoCollector: { quantumParticles: 25, crystals: 20, energyCores: 10, metalScraps: 15 }, // Late game - attracts all items (unlocks at level 70)
+                individualSystemAmplifier: { quantumParticles: 300, crystals: 250, energyCores: 220, metalScraps: 200, tokens: 150 } // Amplifies individual system properties - highest tier (unlocks at level 80)
             },
             consumables: {
                 atomSplit: { quantumParticles: 30, crystals: 25, energyCores: 15, metalScraps: 20 }, // Late game - clears everything on screen
@@ -985,8 +1221,9 @@ class SpaceShooterGame {
                 tank: { speed: 90, health: 250, size: 25, color: '#9e9e9e', shape: 'wide', bonus: 'damageResist', description: 'Heavily armored battle tank with beam-mounted dual rocket boosters, shield generators, defensive turrets, and reinforced plating' }, // Slower, bigger, more health, takes less damage
                 agile: { speed: 190, health: 110, size: 25, color: '#00bcd4', shape: 'diamond', bonus: 'evasion', description: 'High-mobility fighter with sleek extending beams, advanced cooling thrusters, vertical stabilizer fin, and superior evasion systems' }, // Balanced, same size as basic, better dodging
                 // High-tier ships based on Einstein's individual system physics
-                individualStabilizer: { speed: 250, health: 200, size: 25, color: '#ff6b00', shape: 'stabilizer', bonus: 'stabilized', description: 'Quantum stabilizer interceptor with massive stabilizer thrusters, extended pylons, rotating field coils, and advanced quantum propulsion systems' },
-                completeDescriptionVessel: { speed: 280, health: 350, size: 25, color: '#8b00ff', shape: 'complete', bonus: 'complete', description: 'Complete individual system vessel - ultimate balance' }
+                individualStabilizer: { speed: 400, health: 200, size: 25, color: '#ff6b00', shape: 'stabilizer', bonus: 'stabilized', description: 'Quantum stabilizer interceptor with massive stabilizer thrusters, extended pylons, rotating field coils, and advanced quantum propulsion systems' },
+                timeDecayAtomicVessel: { speed: 450, health: 275, size: 25, color: '#ff6b9d', shape: 'timeDecay', bonus: 'timeDecay', description: 'Time decay atomic vessel - harnesses temporal decay for enhanced performance and unique time-based abilities' },
+                completeDescriptionVessel: { speed: 500, health: 350, size: 25, color: '#8b00ff', shape: 'complete', bonus: 'complete', description: 'Complete individual system vessel - ultimate balance' }
             },
             weapons: {
                 basic: { fireRate: 0.5, damage: 10, color: '#4caf50', automatic: false, isLaser: false },
@@ -1035,7 +1272,21 @@ class SpaceShooterGame {
             laserCharge: 0, // Current laser charge (0-1)
             laserCooldown: 0, // Time until laser can fire again
             bossHitEffect: 0, // Visual effect timer when touching boss (0 = no effect, >0 = effect active)
-            bossHitIntensity: 0 // Intensity of boss hit effect (0-1)
+            bossHitIntensity: 0, // Intensity of boss hit effect (0-1)
+            // 3D Wobble System
+            yaw: 0, // Yaw rotation (Z-axis, horizontal spin)
+            pitch: 0, // Pitch rotation (X-axis, vertical tilt)
+            roll: 0, // Roll rotation (Y-axis, side tilt)
+            shrink: 1.0, // Shrink scale (1.0 = normal size, <1.0 = shrunk)
+            spinState: { active: false, progress: 0, duration: 0, directionX: 0, directionY: 0, spinDirection: 1 }, // Spin effect when hit by molecules (direction for movement, spinDirection for rotation)
+            lungeState: { active: false, progress: 0, duration: 0, directionX: 0, directionY: 0, distance: 0 }, // Lunge effect when hit by bullets
+            // Enhanced visual effects
+            screenShake: { x: 0, y: 0, intensity: 0 }, // Screen shake for dramatic impact
+            hitFlash: 0, // Flash effect intensity (0-1)
+            afterimageTrail: [], // Afterimage positions for motion blur effect
+            glowIntensity: 0, // Glow effect intensity (0-1)
+            sparkParticles: [], // Spark particles for visual effects
+            energyRipples: [] // Energy ripple effects
         };
         
         // Apply ship size from current ship (must be after player and equipmentStats are initialized)
@@ -1212,6 +1463,102 @@ class SpaceShooterGame {
         this.updateStats();
         this.spawnInitialTargets();
         this.lastTime = performance.now();
+
+        // Main music helper to centralize gating/force-restart logic
+        this.startMainMusicIfAllowed = ({ forceRestart = false, fadeIn = true } = {}) => {
+            // During dev level control, block any auto-starts; we explicitly start music there
+            if (this._devLevelControlActive) return;
+            if (this._devMusicBlocked) {
+                this._devMusicResetPending = true;
+                return;
+            }
+            if (this.gameState === 'playing' && !this.cutsceneId && !this.isPaused) {
+                this.audio.playMusic('main', true, fadeIn, forceRestart);
+            }
+        };
+
+        // Queue a pending main-music restart to run on next user interaction
+        this.queuePendingMainRestart = (options = {}) => {
+            this._devPendingMain = options;
+            if (this._devPendingMainHandler) return;
+            const handler = () => {
+                this.startMainMusicIfAllowed(this._devPendingMain);
+                this._devPendingMain = null;
+                if (this._devPendingMainHandler) {
+                    document.removeEventListener('click', this._devPendingMainHandler);
+                    document.removeEventListener('keydown', this._devPendingMainHandler);
+                    this._devPendingMainHandler = null;
+                }
+            };
+            this._devPendingMainHandler = handler;
+            document.addEventListener('click', handler, { once: true });
+            document.addEventListener('keydown', handler, { once: true });
+        };
+
+        // Start main music with fallback if autoplay is blocked
+        this.startMainMusicWithFallback = ({ forceRestart = false, fadeIn = true } = {}) => {
+        // In dev level control, do not queue fallbacks; the dev flow starts music explicitly
+        if (this.devMode && this._devLevelControlActive) {
+            return;
+        }
+
+        // In dev mode, bypass fallback/queues and start directly
+        if (this.devMode) {
+            this.stopAllMusic('pre-play-dev-purge', false, true);
+            this._devMusicBlocked = false;
+            this._devMusicResetPending = false;
+            if (this.audio) {
+                this.audio.currentMusic = null;
+                this.audio.currentMusicElement = null;
+                this.audio.pendingMusic = null;
+            }
+            // Allow one dev music start
+            this._devAllowMusicStart = true;
+            this.audio.playMusic('main', true, fadeIn, true);
+            this._devAllowMusicStart = false;
+            return;
+        }
+
+            // Clear any pending queued restart to avoid double-start
+            if (this._devPendingMainHandler) {
+                document.removeEventListener('click', this._devPendingMainHandler);
+                document.removeEventListener('keydown', this._devPendingMainHandler);
+                this._devPendingMainHandler = null;
+            }
+            this._devPendingMain = null;
+
+            // Ensure absolutely nothing is playing before we try
+            this.stopAllMusic('pre-play-fallback-purge', true, true);
+
+            this._devMusicBlocked = false;
+            this._devMusicResetPending = false;
+            this.audio.currentMusic = null;
+            this.audio.currentMusicElement = null;
+            this.audio.pendingMusic = null;
+
+            this.startMainMusicIfAllowed({ forceRestart, fadeIn });
+
+            // If autoplay blocks it, queue for next interaction
+            setTimeout(() => {
+                const el = this.audio.currentMusicElement;
+                const blocked = !el || el.paused;
+                if (blocked) {
+                    // Purge any partially created elements, then queue a clean start on next interaction
+                    this.stopAllMusic('autoplay-blocked-purge', true, true);
+                    this._devMusicBlocked = false;
+                    this._devMusicResetPending = false;
+                    this.queuePendingMainRestart({ forceRestart: true, fadeIn });
+                } else {
+                    // If it started, clear any pending handler
+                    if (this._devPendingMainHandler) {
+                        document.removeEventListener('click', this._devPendingMainHandler);
+                        document.removeEventListener('keydown', this._devPendingMainHandler);
+                        this._devPendingMainHandler = null;
+                    }
+                    this._devPendingMain = null;
+                }
+            }, 200);
+        };
         
         // Performance tracking for adaptive optimization
         this.fps = 60;
@@ -1227,24 +1574,21 @@ class SpaceShooterGame {
         
         // Defer start until preload completes
         this._startAfterPreload = () => {
-            // Initialize cutscene
-            // In dev mode, skip the opening cutscene automatically (user can play it manually)
-            if (this.devMode) {
-                console.log('[DEV] Dev mode detected - skipping opening cutscene');
-                this.showCutscene = false;
-                this.gameState = 'playing';
-                this.cutsceneId = null; // Clear cutscene ID to prevent drawing
-                // Start main music when game begins
-                this.audio.playMusic('main', true, true);
-                // Name prompt disabled
-            } else if (this.showCutscene && this.gameState === 'cutscene') {
+            // Initialize cutscene (dev mode now follows the same intro flow as regular mode)
+            if (this.showCutscene && this.gameState === 'cutscene') {
                 this.startCutscene();
+                // DON'T start music during cutscenes - wait until cutscenes are done
             } else {
                 // Skip cutscene, go straight to game
                 this.gameState = 'playing';
                 this.cutsceneId = null; // Clear cutscene ID to prevent drawing
-                // Start main music when game begins
-                this.audio.playMusic('main', true, true);
+                // Hide cursor during gameplay (crosshair is drawn instead)
+                if (this.canvas) {
+                    this.canvas.style.cursor = 'none';
+                }
+                document.body.style.cursor = 'none';
+                // Start main music when game begins (only if not in cutscene/paused)
+                this.startMainMusicIfAllowed({ fadeIn: true });
                 // Name prompt disabled
             }
             
@@ -1378,6 +1722,83 @@ class SpaceShooterGame {
             });
         });
 
+        // Pre-shade molecule movement effects (trails, glows, energy flows)
+        addTask('Molecule: Movement Effects', () => {
+            this.preShadedSprites.moleculeTrail = this.createPreShadedMoleculeTrail();
+            this.preShadedSprites.moleculeGlow = this.createPreShadedMoleculeGlow();
+            this.preShadedSprites.moleculeEnergyFlow = this.createPreShadedMoleculeEnergyFlow();
+        });
+
+        // Pre-shade ship wobble effects (rotation states, stretch/shrink, depth effects)
+        addTask('Ship: Wobble Effects', () => {
+            this.preShadedSprites.shipWobble = this.createPreShadedShipWobble();
+            this.preShadedSprites.shipStretch = this.createPreShadedShipStretch();
+            this.preShadedSprites.shipDepth = this.createPreShadedShipDepth();
+        });
+
+        // Pre-shade collision effects (explosions, impact particles, energy ripples)
+        addTask('Collisions: Impact Effects', () => {
+            this.preShadedSprites.explosion = this.createPreShadedExplosion();
+            this.preShadedSprites.impactParticles = this.createPreShadedImpactParticles();
+            this.preShadedSprites.energyRipple = this.createPreShadedEnergyRipple();
+        });
+
+        // Pre-shade cutscenes (Will's Way Studios intro, opening, level cutscenes)
+        addTask('Cutscenes: Will\'s Way Studios Intro', () => {
+            this.preShadedSprites.willsWayIntro = this.createPreShadedWillsWayIntro();
+            this.preShadedSprites.wwsStudioBackground = this.createPreShadedWWSStudioBackground();
+            this.preShadedSprites.wwsLogo = this.createPreShadedWWSLogo();
+        });
+
+        addTask('Cutscenes: SpaceBell Interactive', () => {
+            this.preShadedSprites.spaceBellQuantum = this.createPreShadedSpaceBellQuantum();
+            this.preShadedSprites.spaceBellInteractive = this.createPreShadedSpaceBellInteractive();
+        });
+
+        addTask('Cutscenes: Opening & Level Cutscenes', () => {
+            this.preShadedSprites.openingCutscene = this.createPreShadedOpeningCutscene();
+            this.preShadedSprites.levelCutscene = this.createPreShadedLevelCutscene();
+        });
+
+        // Pre-shade boss scenes (backgrounds, enemies, puzzle hints)
+        addTask('Boss Scenes: Backgrounds & Effects', () => {
+            this.preShadedSprites.bossBackground = this.createPreShadedBossBackground();
+            this.preShadedSprites.bossEnergyNetwork = this.createPreShadedBossEnergyNetwork();
+            this.preShadedSprites.bossPuzzleHint = this.createPreShadedBossPuzzleHint();
+        });
+
+        addTask('Boss Scenes: Enemy Types', () => {
+            this.preShadedSprites.neuralDrone = this.createPreShadedNeuralDrone();
+            this.preShadedSprites.geneticSentinel = this.createPreShadedGeneticSentinel();
+            this.preShadedSprites.molecularDefender = this.createPreShadedMolecularDefender();
+            this.preShadedSprites.cellularGuardian = this.createPreShadedCellularGuardian();
+            this.preShadedSprites.quantumDisruptor = this.createPreShadedQuantumDisruptor();
+        });
+
+        // Pre-shade game initialization/start screens
+        addTask('Game: Initialization & Start Screens', () => {
+            this.preShadedSprites.gameStart = this.createPreShadedGameStart();
+            this.preShadedSprites.gameInitialization = this.createPreShadedGameInitialization();
+            this.preShadedSprites.modeBackgrounds = this.createPreShadedModeBackgrounds();
+        });
+
+        // Pre-shade puzzles (especially bell pair mode)
+        addTask('Puzzles: Bell Pair Mode', () => {
+            this.preShadedSprites.bellPairConnection = this.createPreShadedBellPairConnection();
+            this.preShadedSprites.bellPairPuzzle = this.createPreShadedBellPairPuzzle();
+            this.preShadedSprites.puzzleOrb = this.createPreShadedPuzzleOrb();
+            this.preShadedSprites.puzzleGlow = this.createPreShadedPuzzleGlow();
+        });
+
+        // Pre-shade material drop particles
+        addTask('Materials: Drop Particles', () => {
+            this.preShadedSprites.quantumParticle = this.createPreShadedMaterialDrop('quantumParticles');
+            this.preShadedSprites.energyCore = this.createPreShadedMaterialDrop('energyCores');
+            this.preShadedSprites.metalScrap = this.createPreShadedMaterialDrop('metalScraps');
+            this.preShadedSprites.crystal = this.createPreShadedMaterialDrop('crystals');
+            this.preShadedSprites.token = this.createPreShadedToken();
+        });
+
         const total = tasks.length;
         this.preloadProgress = 0;
         this.preloadComplete = false;
@@ -1450,7 +1871,7 @@ class SpaceShooterGame {
             barFill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
         }
         if (text) {
-            text.textContent = label ? `${label} (${pct}%)` : `Loading… ${pct}%`;
+            text.textContent = label ? `${label} (${pct}%)` : `Loadingâ€¦ ${pct}%`;
         }
         if (overlay && progress >= 1) {
             overlay.style.opacity = '0';
@@ -1507,6 +1928,1059 @@ class SpaceShooterGame {
         return { canvas, size, baseRadius };
     }
 
+    // Pre-shade molecule movement effects (trails, glows, energy flows)
+    createPreShadedMoleculeTrail() {
+        const size = 200;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Create trail gradient (fading trail effect for moving molecules)
+        const trailGradient = ctx.createLinearGradient(cx - 50, cy, cx + 50, cy);
+        trailGradient.addColorStop(0, 'rgba(255, 150, 150, 0)');
+        trailGradient.addColorStop(0.3, 'rgba(255, 150, 150, 0.3)');
+        trailGradient.addColorStop(0.7, 'rgba(255, 200, 200, 0.6)');
+        trailGradient.addColorStop(1, 'rgba(255, 255, 255, 0.8)');
+        
+        ctx.fillStyle = trailGradient;
+        ctx.fillRect(cx - 50, cy - 5, 100, 10);
+        
+        // Add energy flow lines
+        ctx.strokeStyle = 'rgba(255, 200, 200, 0.5)';
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 5; i++) {
+            ctx.beginPath();
+            ctx.moveTo(cx - 40 + i * 20, cy - 3);
+            ctx.lineTo(cx - 30 + i * 20, cy + 3);
+            ctx.stroke();
+        }
+
+        return { canvas, size, type: 'trail' };
+    }
+
+    createPreShadedMoleculeGlow() {
+        const size = 150;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+        const radius = 60;
+
+        // Outer glow ring
+        const outerGlow = ctx.createRadialGradient(cx, cy, radius * 0.7, cx, cy, radius * 1.5);
+        outerGlow.addColorStop(0, 'rgba(255, 150, 150, 0.4)');
+        outerGlow.addColorStop(0.5, 'rgba(255, 200, 200, 0.2)');
+        outerGlow.addColorStop(1, 'rgba(255, 150, 150, 0)');
+        ctx.fillStyle = outerGlow;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Inner glow
+        const innerGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+        innerGlow.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
+        innerGlow.addColorStop(0.5, 'rgba(255, 200, 200, 0.6)');
+        innerGlow.addColorStop(1, 'rgba(255, 150, 150, 0)');
+        ctx.fillStyle = innerGlow;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        return { canvas, size, type: 'glow' };
+    }
+
+    createPreShadedMoleculeEnergyFlow() {
+        const size = 180;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Energy flow lines (animated flow effect)
+        ctx.strokeStyle = 'rgba(255, 200, 200, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = 'rgba(255, 150, 150, 0.8)';
+        
+        for (let i = 0; i < 8; i++) {
+            const angle = (Math.PI * 2 * i) / 8;
+            const startRadius = 30;
+            const endRadius = 70;
+            ctx.beginPath();
+            ctx.moveTo(cx + Math.cos(angle) * startRadius, cy + Math.sin(angle) * startRadius);
+            ctx.lineTo(cx + Math.cos(angle) * endRadius, cy + Math.sin(angle) * endRadius);
+            ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+
+        return { canvas, size, type: 'energyFlow' };
+    }
+
+    // Pre-shade ship wobble effects
+    createPreShadedShipWobble() {
+        const size = 200;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Create multiple rotation states for wobble (0Â°, 45Â°, 90Â°, 135Â°, 180Â°, etc.)
+        const rotations = [];
+        for (let i = 0; i < 8; i++) {
+            const angle = (Math.PI * 2 * i) / 8;
+            const rotCanvas = document.createElement('canvas');
+            rotCanvas.width = size;
+            rotCanvas.height = size;
+            const rotCtx = rotCanvas.getContext('2d');
+            
+            rotCtx.translate(cx, cy);
+            rotCtx.rotate(angle);
+            rotCtx.translate(-cx, -cy);
+            
+            // Draw ship shape at this rotation (simplified triangle for preshader)
+            rotCtx.fillStyle = 'rgba(79, 195, 247, 0.8)';
+            rotCtx.beginPath();
+            rotCtx.moveTo(cx, cy - 30);
+            rotCtx.lineTo(cx - 20, cy + 20);
+            rotCtx.lineTo(cx + 20, cy + 20);
+            rotCtx.closePath();
+            rotCtx.fill();
+            
+            rotations.push({ canvas: rotCanvas, angle });
+        }
+
+        return { rotations, size, type: 'wobble' };
+    }
+
+    createPreShadedShipStretch() {
+        const size = 200;
+        const stretchVariants = [];
+        
+        // Create stretch variants (horizontal and vertical)
+        for (let stretch = 0.8; stretch <= 1.2; stretch += 0.1) {
+            // Horizontal stretch
+            const hCanvas = document.createElement('canvas');
+            hCanvas.width = size;
+            hCanvas.height = size;
+            const hCtx = hCanvas.getContext('2d');
+            hCtx.translate(size / 2, size / 2);
+            hCtx.scale(stretch, 1.0);
+            hCtx.translate(-size / 2, -size / 2);
+            
+            hCtx.fillStyle = 'rgba(79, 195, 247, 0.8)';
+            hCtx.beginPath();
+            hCtx.moveTo(size / 2, size / 2 - 30);
+            hCtx.lineTo(size / 2 - 20, size / 2 + 20);
+            hCtx.lineTo(size / 2 + 20, size / 2 + 20);
+            hCtx.closePath();
+            hCtx.fill();
+            
+            // Vertical stretch
+            const vCanvas = document.createElement('canvas');
+            vCanvas.width = size;
+            vCanvas.height = size;
+            const vCtx = vCanvas.getContext('2d');
+            vCtx.translate(size / 2, size / 2);
+            vCtx.scale(1.0, stretch);
+            vCtx.translate(-size / 2, -size / 2);
+            
+            vCtx.fillStyle = 'rgba(79, 195, 247, 0.8)';
+            vCtx.beginPath();
+            vCtx.moveTo(size / 2, size / 2 - 30);
+            vCtx.lineTo(size / 2 - 20, size / 2 + 20);
+            vCtx.lineTo(size / 2 + 20, size / 2 + 20);
+            vCtx.closePath();
+            vCtx.fill();
+            
+            stretchVariants.push({ horizontal: hCanvas, vertical: vCanvas, stretch });
+        }
+
+        return { variants: stretchVariants, size, type: 'stretch' };
+    }
+
+    createPreShadedShipDepth() {
+        const size = 200;
+        const depthVariants = [];
+        
+        // Create depth scale variants (0.8 to 1.2)
+        for (let scale = 0.8; scale <= 1.2; scale += 0.1) {
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            const cx = size / 2;
+            const cy = size / 2;
+            
+            ctx.translate(cx, cy);
+            ctx.scale(scale, scale);
+            ctx.translate(-cx, -cy);
+            
+            // Draw ship with depth effect
+            ctx.fillStyle = `rgba(79, 195, 247, ${0.6 + (scale - 0.8) * 0.5})`;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - 30);
+            ctx.lineTo(cx - 20, cy + 20);
+            ctx.lineTo(cx + 20, cy + 20);
+            ctx.closePath();
+            ctx.fill();
+            
+            depthVariants.push({ canvas, scale });
+        }
+
+        return { variants: depthVariants, size, type: 'depth' };
+    }
+
+    // Pre-shade collision effects
+    createPreShadedExplosion() {
+        const size = 300;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Explosion outer ring
+        const outerRing = ctx.createRadialGradient(cx, cy, 50, cx, cy, 120);
+        outerRing.addColorStop(0, 'rgba(255, 200, 100, 0.8)');
+        outerRing.addColorStop(0.5, 'rgba(255, 150, 50, 0.6)');
+        outerRing.addColorStop(1, 'rgba(255, 100, 0, 0)');
+        ctx.fillStyle = outerRing;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 120, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Explosion inner core
+        const innerCore = ctx.createRadialGradient(cx, cy, 0, cx, cy, 60);
+        innerCore.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+        innerCore.addColorStop(0.3, 'rgba(255, 200, 100, 0.9)');
+        innerCore.addColorStop(0.7, 'rgba(255, 150, 50, 0.7)');
+        innerCore.addColorStop(1, 'rgba(255, 100, 0, 0)');
+        ctx.fillStyle = innerCore;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 60, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Explosion particles
+        ctx.fillStyle = 'rgba(255, 200, 100, 0.9)';
+        for (let i = 0; i < 12; i++) {
+            const angle = (Math.PI * 2 * i) / 12;
+            const dist = 80;
+            const px = cx + Math.cos(angle) * dist;
+            const py = cy + Math.sin(angle) * dist;
+            ctx.beginPath();
+            ctx.arc(px, py, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        return { canvas, size, type: 'explosion' };
+    }
+
+    createPreShadedImpactParticles() {
+        const size = 150;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Impact spark particles
+        ctx.fillStyle = 'rgba(255, 150, 50, 0.9)';
+        ctx.shadowBlur = 6;
+        ctx.shadowColor = 'rgba(255, 200, 100, 0.8)';
+        
+        for (let i = 0; i < 8; i++) {
+            const angle = (Math.PI * 2 * i) / 8;
+            const dist = 30;
+            const px = cx + Math.cos(angle) * dist;
+            const py = cy + Math.sin(angle) * dist;
+            ctx.beginPath();
+            ctx.arc(px, py, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+
+        return { canvas, size, type: 'impactParticles' };
+    }
+
+    createPreShadedEnergyRipple() {
+        const size = 400;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Energy ripple rings
+        ctx.strokeStyle = 'rgba(255, 150, 150, 0.6)';
+        ctx.lineWidth = 3;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = 'rgba(255, 200, 200, 0.8)';
+        
+        for (let i = 1; i <= 4; i++) {
+            const radius = 40 + i * 30;
+            const alpha = 0.8 - (i * 0.15);
+            ctx.strokeStyle = `rgba(255, 150, 150, ${alpha})`;
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+
+        return { canvas, size, type: 'energyRipple' };
+    }
+
+    // Pre-shade cutscenes
+    createPreShadedWillsWayIntro() {
+        const size = 1920; // Full screen size
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const w = size;
+        const h = size;
+
+        // Pre-render Will's Way Studios intro background
+        const bgGradient = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 1.2);
+        bgGradient.addColorStop(0, '#0a0515');
+        bgGradient.addColorStop(0.2, '#0f0a1a');
+        bgGradient.addColorStop(0.4, '#0a0510');
+        bgGradient.addColorStop(0.7, '#050508');
+        bgGradient.addColorStop(1, '#000000');
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, w, h);
+
+        return { canvas, size, type: 'willsWayIntro' };
+    }
+
+    createPreShadedWWSStudioBackground() {
+        const size = 1920;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const w = size;
+        const h = size;
+
+        // Studio background with subtle particles
+        const bgGradient = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 1.2);
+        bgGradient.addColorStop(0, '#0a0515');
+        bgGradient.addColorStop(0.2, '#0f0a1a');
+        bgGradient.addColorStop(0.4, '#0a0510');
+        bgGradient.addColorStop(0.7, '#050508');
+        bgGradient.addColorStop(1, '#000000');
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, w, h);
+
+        // Subtle starfield
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        for (let i = 0; i < 100; i++) {
+            const x = (i * 137.5) % w;
+            const y = (i * 197.3) % h;
+            ctx.beginPath();
+            ctx.arc(x, y, 1, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        return { canvas, size, type: 'wwsStudioBackground' };
+    }
+
+    createPreShadedWWSLogo() {
+        const size = 800;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Will's Way Studios logo (simplified for preshader)
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 80px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText("Will's Way", cx, cy - 40);
+        ctx.fillText('Studios', cx, cy + 40);
+
+        // Logo glow
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = 'rgba(79, 195, 247, 0.8)';
+        ctx.fillText("Will's Way", cx, cy - 40);
+        ctx.fillText('Studios', cx, cy + 40);
+        ctx.shadowBlur = 0;
+
+        return { canvas, size, type: 'wwsLogo' };
+    }
+
+    createPreShadedSpaceBellQuantum() {
+        const size = 1920;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const w = size;
+        const h = size;
+
+        // Quantum field background
+        const bgGradient = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.9);
+        bgGradient.addColorStop(0, '#0a0a1a');
+        bgGradient.addColorStop(0.3, '#1a1a2e');
+        bgGradient.addColorStop(0.7, '#0f0f1e');
+        bgGradient.addColorStop(1, '#050510');
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, w, h);
+
+        // Quantum particles
+        ctx.fillStyle = 'rgba(79, 195, 247, 0.4)';
+        for (let i = 0; i < 200; i++) {
+            const x = (i * 137.5) % w;
+            const y = (i * 197.3) % h;
+            ctx.beginPath();
+            ctx.arc(x, y, 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        return { canvas, size, type: 'spaceBellQuantum' };
+    }
+
+    createPreShadedSpaceBellInteractive() {
+        const size = 800;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // SpaceBell Interactive logo
+        ctx.fillStyle = '#4fc3f7';
+        ctx.font = 'bold 70px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('SpaceBell', cx, cy - 30);
+        ctx.fillText('Interactive', cx, cy + 30);
+
+        // Glow effect
+        ctx.shadowBlur = 25;
+        ctx.shadowColor = 'rgba(79, 195, 247, 0.9)';
+        ctx.fillText('SpaceBell', cx, cy - 30);
+        ctx.fillText('Interactive', cx, cy + 30);
+        ctx.shadowBlur = 0;
+
+        return { canvas, size, type: 'spaceBellInteractive' };
+    }
+
+    createPreShadedOpeningCutscene() {
+        const size = 1920;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const w = size;
+        const h = size;
+
+        // Opening cutscene background
+        const bgGradient = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 1.0);
+        bgGradient.addColorStop(0, '#0a0a1a');
+        bgGradient.addColorStop(0.5, '#1a1a2e');
+        bgGradient.addColorStop(1, '#050510');
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, w, h);
+
+        return { canvas, size, type: 'openingCutscene' };
+    }
+
+    createPreShadedLevelCutscene() {
+        const size = 1920;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const w = size;
+        const h = size;
+
+        // Level cutscene background
+        const bgGradient = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 1.0);
+        bgGradient.addColorStop(0, '#0a0a1a');
+        bgGradient.addColorStop(0.5, '#1a1a2e');
+        bgGradient.addColorStop(1, '#050510');
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, w, h);
+
+        // Level text placeholder
+        ctx.fillStyle = '#4fc3f7';
+        ctx.font = 'bold 100px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('LEVEL', w * 0.5, h * 0.4);
+        ctx.fillText('X', w * 0.5, h * 0.6);
+
+        return { canvas, size, type: 'levelCutscene' };
+    }
+
+    // Pre-shade boss scenes
+    createPreShadedBossBackground() {
+        const size = 1920;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const w = size;
+        const h = size;
+
+        // Boss background gradient
+        const gradient = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.8);
+        gradient.addColorStop(0, '#0a0515');
+        gradient.addColorStop(0.2, '#1a0a2e');
+        gradient.addColorStop(0.4, '#16213e');
+        gradient.addColorStop(0.7, '#0f0f1e');
+        gradient.addColorStop(1, '#050510');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, w, h);
+
+        return { canvas, size, type: 'bossBackground' };
+    }
+
+    createPreShadedBossEnergyNetwork() {
+        const size = 1920;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const w = size;
+        const h = size;
+
+        // Energy network lines
+        ctx.strokeStyle = 'rgba(139, 0, 255, 0.2)';
+        ctx.lineWidth = 1.5;
+        ctx.shadowBlur = 4;
+        ctx.shadowColor = 'rgba(139, 0, 255, 0.2)';
+        
+        for (let i = 0; i < 15; i++) {
+            const x1 = (i * 137.5) % w;
+            const y1 = (i * 197.3) % h;
+            const x2 = ((i + 5) * 137.5) % w;
+            const y2 = ((i + 5) * 197.3) % h;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+
+        return { canvas, size, type: 'bossEnergyNetwork' };
+    }
+
+    createPreShadedBossPuzzleHint() {
+        const size = 600;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = 150;
+        const ctx = canvas.getContext('2d');
+
+        // Puzzle hint background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillRect(0, 0, size, 150);
+
+        // Hint text
+        ctx.fillStyle = '#ff6b6b';
+        ctx.font = 'bold 16px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText('Boss Puzzle Hint', 20, 35);
+
+        return { canvas, size, type: 'bossPuzzleHint' };
+    }
+
+    createPreShadedNeuralDrone() {
+        const size = 100;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Neural Drone - hexagonal shape
+        ctx.fillStyle = '#9c27b0';
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+            const angle = (Math.PI / 3) * i;
+            const x = cx + Math.cos(angle) * 30;
+            const y = cy + Math.sin(angle) * 30;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fill();
+
+        // Inner core
+        ctx.fillStyle = '#2196f3';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 15, 0, Math.PI * 2);
+        ctx.fill();
+
+        return { canvas, size, type: 'neuralDrone' };
+    }
+
+    createPreShadedGeneticSentinel() {
+        const size = 120;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Genetic Sentinel - double helix shape
+        ctx.strokeStyle = '#00ff88';
+        ctx.lineWidth = 3;
+        for (let i = 0; i < 8; i++) {
+            const angle = (Math.PI * 2 * i) / 8;
+            const radius = 25;
+            const x = cx + Math.cos(angle) * radius;
+            const y = cy + Math.sin(angle) * radius;
+            ctx.beginPath();
+            ctx.arc(x, y, 8, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        // Central core
+        ctx.fillStyle = '#00ccff';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 20, 0, Math.PI * 2);
+        ctx.fill();
+
+        return { canvas, size, type: 'geneticSentinel' };
+    }
+
+    createPreShadedMolecularDefender() {
+        const size = 130;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Molecular Defender - complex geometric
+        ctx.fillStyle = '#ff9800';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 35, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Outer spikes
+        ctx.strokeStyle = '#f44336';
+        ctx.lineWidth = 3;
+        for (let i = 0; i < 8; i++) {
+            const angle = (Math.PI * 2 * i) / 8;
+            const x1 = cx + Math.cos(angle) * 35;
+            const y1 = cy + Math.sin(angle) * 35;
+            const x2 = cx + Math.cos(angle) * 50;
+            const y2 = cy + Math.sin(angle) * 50;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+        }
+
+        return { canvas, size, type: 'molecularDefender' };
+    }
+
+    createPreShadedCellularGuardian() {
+        const size = 140;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Cellular Guardian - circular with spikes
+        ctx.fillStyle = '#ffc107';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 40, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Spikes
+        ctx.fillStyle = '#ff9800';
+        for (let i = 0; i < 12; i++) {
+            const angle = (Math.PI * 2 * i) / 12;
+            const x = cx + Math.cos(angle) * 40;
+            const y = cy + Math.sin(angle) * 40;
+            ctx.beginPath();
+            ctx.arc(x, y, 6, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        return { canvas, size, type: 'cellularGuardian' };
+    }
+
+    createPreShadedQuantumDisruptor() {
+        const size = 150;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Quantum Disruptor - energy-based
+        const outerGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 50);
+        outerGlow.addColorStop(0, 'rgba(156, 39, 176, 0.8)');
+        outerGlow.addColorStop(0.5, 'rgba(79, 195, 247, 0.6)');
+        outerGlow.addColorStop(1, 'rgba(156, 39, 176, 0)');
+        ctx.fillStyle = outerGlow;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 50, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Inner core
+        ctx.fillStyle = 'rgba(79, 195, 247, 0.9)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 25, 0, Math.PI * 2);
+        ctx.fill();
+
+        return { canvas, size, type: 'quantumDisruptor' };
+    }
+
+    // Pre-shade game initialization/start
+    createPreShadedGameStart() {
+        const size = 1920;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const w = size;
+        const h = size;
+
+        // Game start screen background
+        const bgGradient = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 1.0);
+        bgGradient.addColorStop(0, '#0a0a1a');
+        bgGradient.addColorStop(0.5, '#1a1a2e');
+        bgGradient.addColorStop(1, '#050510');
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, w, h);
+
+        return { canvas, size, type: 'gameStart' };
+    }
+
+    createPreShadedGameInitialization() {
+        const size = 1920;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const w = size;
+        const h = size;
+
+        // Initialization screen
+        const bgGradient = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 1.0);
+        bgGradient.addColorStop(0, '#000000');
+        bgGradient.addColorStop(0.5, '#0a0a1a');
+        bgGradient.addColorStop(1, '#000000');
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, w, h);
+
+        return { canvas, size, type: 'gameInitialization' };
+    }
+
+    createPreShadedModeBackgrounds() {
+        const size = 1920;
+        const backgrounds = {};
+
+        // Ensemble mode background
+        const ensembleCanvas = document.createElement('canvas');
+        ensembleCanvas.width = size;
+        ensembleCanvas.height = size;
+        const ensembleCtx = ensembleCanvas.getContext('2d');
+        const ensembleGradient = ensembleCtx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, Math.max(size, size) * 0.9);
+        ensembleGradient.addColorStop(0, '#0a0a1a');
+        ensembleGradient.addColorStop(0.3, '#1a1a2e');
+        ensembleGradient.addColorStop(0.7, '#0f0f1e');
+        ensembleGradient.addColorStop(1, '#050510');
+        ensembleCtx.fillStyle = ensembleGradient;
+        ensembleCtx.fillRect(0, 0, size, size);
+        backgrounds.ensemble = ensembleCanvas;
+
+        // Individual mode background
+        const individualCanvas = document.createElement('canvas');
+        individualCanvas.width = size;
+        individualCanvas.height = size;
+        const individualCtx = individualCanvas.getContext('2d');
+        const individualGradient = individualCtx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, Math.max(size, size) * 0.9);
+        individualGradient.addColorStop(0, '#0a0a1a');
+        individualGradient.addColorStop(0.3, '#1a1a2e');
+        individualGradient.addColorStop(0.7, '#0f0f1e');
+        individualGradient.addColorStop(1, '#050510');
+        individualCtx.fillStyle = individualGradient;
+        individualCtx.fillRect(0, 0, size, size);
+        backgrounds.individual = individualCanvas;
+
+        // Bell mode background
+        const bellCanvas = document.createElement('canvas');
+        bellCanvas.width = size;
+        bellCanvas.height = size;
+        const bellCtx = bellCanvas.getContext('2d');
+        const bellGradient = bellCtx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, Math.max(size, size) * 0.9);
+        bellGradient.addColorStop(0, '#0a0a1a');
+        bellGradient.addColorStop(0.3, '#1a1a2e');
+        bellGradient.addColorStop(0.7, '#0f0f1e');
+        bellGradient.addColorStop(1, '#050510');
+        bellCtx.fillStyle = bellGradient;
+        bellCtx.fillRect(0, 0, size, size);
+        backgrounds.bell = bellCanvas;
+
+        return { backgrounds, size, type: 'modeBackgrounds' };
+    }
+
+    // Pre-shade puzzles (especially bell pair mode)
+    createPreShadedBellPairConnection() {
+        const size = 400;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Bell pair connection line (quantum entanglement bond)
+        const bondGradient = ctx.createLinearGradient(0, cy, size, cy);
+        bondGradient.addColorStop(0, 'rgba(79, 195, 247, 0.6)');
+        bondGradient.addColorStop(0.5, 'rgba(129, 212, 250, 0.8)');
+        bondGradient.addColorStop(1, 'rgba(79, 195, 247, 0.6)');
+        ctx.strokeStyle = bondGradient;
+        ctx.lineWidth = 3;
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = 'rgba(79, 195, 247, 0.6)';
+        ctx.beginPath();
+        ctx.moveTo(50, cy);
+        ctx.lineTo(size - 50, cy);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Energy flow particles along the bond
+        ctx.fillStyle = 'rgba(129, 212, 250, 0.8)';
+        for (let i = 0; i < 5; i++) {
+            const x = 50 + (i * (size - 100) / 4);
+            ctx.beginPath();
+            ctx.arc(x, cy, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        return { canvas, size, type: 'bellPairConnection' };
+    }
+
+    createPreShadedBellPairPuzzle() {
+        const size = 200;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Puzzle glow effect for active bell pairs
+        const puzzleGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, size / 2);
+        puzzleGlow.addColorStop(0, 'rgba(255, 230, 180, 0.8)');
+        puzzleGlow.addColorStop(0.5, 'rgba(255, 200, 140, 0.6)');
+        puzzleGlow.addColorStop(1, 'rgba(255, 230, 180, 0)');
+        ctx.fillStyle = puzzleGlow;
+        ctx.beginPath();
+        ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Puzzle pulse ring
+        ctx.strokeStyle = 'rgba(255, 240, 200, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, size / 3, 0, Math.PI * 2);
+        ctx.stroke();
+
+        return { canvas, size, type: 'bellPairPuzzle' };
+    }
+
+    createPreShadedPuzzleOrb() {
+        const size = 64;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+        const orbSize = 16;
+
+        // Orb aura
+        const aura = ctx.createRadialGradient(cx, cy, 0, cx, cy, orbSize * 2.3);
+        aura.addColorStop(0, 'rgba(255, 230, 180, 0.6)');
+        aura.addColorStop(1, 'rgba(255, 230, 180, 0)');
+        ctx.fillStyle = aura;
+        ctx.beginPath();
+        ctx.arc(cx, cy, orbSize * 2.3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Orb core
+        const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, orbSize);
+        grad.addColorStop(0, 'rgba(255, 245, 220, 0.9)');
+        grad.addColorStop(0.5, 'rgba(255, 200, 140, 0.8)');
+        grad.addColorStop(1, 'rgba(255, 160, 90, 0.7)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, orbSize, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Orb ring
+        ctx.strokeStyle = 'rgba(255, 240, 200, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, orbSize * 1.3, 0, Math.PI * 2);
+        ctx.stroke();
+
+        return { canvas, size, type: 'puzzleOrb' };
+    }
+
+    createPreShadedPuzzleGlow() {
+        const size = 150;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // Puzzle glow effect
+        const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, size / 2);
+        glow.addColorStop(0, 'rgba(255, 230, 180, 1.0)');
+        glow.addColorStop(0.3, 'rgba(255, 200, 140, 0.8)');
+        glow.addColorStop(0.7, 'rgba(255, 230, 180, 0.4)');
+        glow.addColorStop(1, 'rgba(255, 230, 180, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        return { canvas, size, type: 'puzzleGlow' };
+    }
+
+    // Pre-shade material drop particles
+    createPreShadedMaterialDrop(materialType) {
+        const size = 32;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+        const itemSize = 8;
+
+        // Determine color based on material type
+        let gradient;
+        if (materialType === 'quantumParticles') {
+            // Purple atomic design
+            gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, itemSize);
+            gradient.addColorStop(0, '#ba68c8');
+            gradient.addColorStop(0.4, '#9c27b0');
+            gradient.addColorStop(0.8, '#7b1fa2');
+            gradient.addColorStop(1, '#6a1b9a');
+        } else if (materialType === 'energyCores') {
+            // Blue energy design
+            gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, itemSize);
+            gradient.addColorStop(0, '#4fc3f7');
+            gradient.addColorStop(0.4, '#29b6f6');
+            gradient.addColorStop(0.8, '#039be5');
+            gradient.addColorStop(1, '#0277bd');
+        } else if (materialType === 'metalScraps') {
+            // Silver/gray metallic design
+            gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, itemSize);
+            gradient.addColorStop(0, '#e0e0e0');
+            gradient.addColorStop(0.4, '#bdbdbd');
+            gradient.addColorStop(0.8, '#9e9e9e');
+            gradient.addColorStop(1, '#757575');
+        } else if (materialType === 'crystals') {
+            // Cyan crystal design
+            gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, itemSize);
+            gradient.addColorStop(0, '#00bcd4');
+            gradient.addColorStop(0.4, '#00acc1');
+            gradient.addColorStop(0.8, '#0097a7');
+            gradient.addColorStop(1, '#00838f');
+        } else {
+            // Default white
+            gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, itemSize);
+            gradient.addColorStop(0, '#ffffff');
+            gradient.addColorStop(1, '#cccccc');
+        }
+
+        ctx.fillStyle = gradient;
+        
+        // Outer glow
+        ctx.shadowBlur = 6;
+        if (materialType === 'quantumParticles') {
+            ctx.shadowColor = 'rgba(156, 39, 176, 0.6)';
+        } else if (materialType === 'energyCores') {
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.6)';
+        } else if (materialType === 'metalScraps') {
+            ctx.shadowColor = 'rgba(189, 189, 189, 0.6)';
+        } else if (materialType === 'crystals') {
+            ctx.shadowColor = 'rgba(0, 188, 212, 0.6)';
+        } else {
+            ctx.shadowColor = 'rgba(255, 255, 255, 0.6)';
+        }
+        
+        ctx.beginPath();
+        ctx.arc(cx, cy, itemSize, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        return { canvas, size, type: materialType };
+    }
+
+    createPreShadedToken() {
+        const size = 32;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+        const tokenSize = 8;
+
+        // Token - gold/yellow design
+        const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, tokenSize);
+        gradient.addColorStop(0, '#ffd54f');
+        gradient.addColorStop(0.3, '#ffca28');
+        gradient.addColorStop(0.7, '#ffb300');
+        gradient.addColorStop(1, '#f57c00');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(cx, cy, tokenSize, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Token glow
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = 'rgba(255, 193, 7, 0.8)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, tokenSize, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Inner bright core
+        ctx.fillStyle = 'rgba(255, 255, 200, 0.9)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, tokenSize * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        return { canvas, size, type: 'token' };
+    }
 
     setupEventListeners() {
         // Mode buttons
@@ -1524,10 +2998,11 @@ class SpaceShooterGame {
             if (this.audio && !this.audio.audioInitialized) {
                 console.log('[Audio] Initializing audio from keydown event');
                 this.audio.init();
-                // If game is playing, start music
-                if (this.gameState === 'playing' && !this.audio.currentMusicElement) {
+                // If game is playing (not in cutscene/paused), start music
+                if (this.gameState === 'playing' && !this.cutsceneId && !this.isPaused &&
+                    !this.audio.currentMusicElement) {
                     console.log('[Audio] Game is playing, starting main music');
-                    this.audio.playMusic('main', true, true);
+                    this.startMainMusicIfAllowed({ fadeIn: true });
                 }
             }
             
@@ -1747,6 +3222,35 @@ class SpaceShooterGame {
 
         // Mouse events on document to work through panels
         document.addEventListener('mousedown', (e) => {
+            // Handle Will's-Way-Studios intro - prevent skipping and handle shooting
+            if (this.gameState === 'cutscene' && this.cutsceneId === 'willsWayIntro') {
+                // Handle Phase 0: Allow shooting at logo
+                if (this.cutscenePhase === 0) {
+                    console.log('[WWS Logo Phase] mousedown event captured in Phase 0', { 
+                        gameState: this.gameState, 
+                        cutsceneId: this.cutsceneId, 
+                        phase: this.cutscenePhase,
+                        target: e.target 
+                    });
+                    // Call shooting function FIRST before preventing default
+                    this.shootInWWSLogoPhase(e);
+                    // Then prevent default to stop page navigation
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+                // Handle SpaceBell interactive phase shooting (Phase 1)
+                if (this.cutscenePhase === 1) {
+                    // Prevent clicks from starting the game during SpaceBell phase
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.target === this.canvas || e.target === this.cutsceneCanvas || e.target === this.cutsceneOverlay) {
+                        this.shootInSpaceBellPhase(e);
+                    }
+                    return false;
+                }
+            }
+            
             if (this.gameState === 'playing' && e.target === this.canvas) {
                 e.preventDefault();
                 this.mouseDown = true;
@@ -1775,29 +3279,27 @@ class SpaceShooterGame {
             this.mouseDown = false;
         });
 
-        // Mouse wheel for weapon wheel and repair selection
+        // Mouse wheel for weapon wheel, repair selection, and UI scrolling
         document.addEventListener('wheel', (e) => {
-            // Check if instructions panel is visible and mouse is over it - allow normal scrolling
-            // OPTIMIZATION: Use cached DOM element
-            const instructionsPanel = this._cachedElements.instructions;
-            if (instructionsPanel && instructionsPanel.classList.contains('paused')) {
-                const rect = instructionsPanel.getBoundingClientRect();
-                if (e.clientX >= rect.left && e.clientX <= rect.right &&
-                    e.clientY >= rect.top && e.clientY <= rect.bottom) {
-                    // Mouse is over instructions panel - allow normal scrolling
-                    return; // Don't prevent default, allow normal scroll
-                }
-            }
+            // List of scrollable UI panels
+            const scrollableUIs = [
+                { element: this._cachedElements.instructions, class: 'paused' },
+                { element: this._cachedElements.settingsUI, class: 'active' },
+                { element: this._cachedElements.craftingUI, class: 'active' },
+                { element: this._cachedElements.shopUI, class: 'active' },
+                { element: this._cachedElements.inventoryUI, class: 'active' },
+                { element: this._cachedElements.tutorialUI, class: 'active' }
+            ];
             
-            // Check if settings panel is visible and mouse is over it - allow normal scrolling
-            // OPTIMIZATION: Use cached DOM element
-            const settingsPanel = this._cachedElements.settingsUI;
-            if (settingsPanel && settingsPanel.classList.contains('active')) {
-                const rect = settingsPanel.getBoundingClientRect();
-                if (e.clientX >= rect.left && e.clientX <= rect.right &&
-                    e.clientY >= rect.top && e.clientY <= rect.bottom) {
-                    // Mouse is over settings panel - allow normal scrolling
-                    return; // Don't prevent default, allow normal scroll
+            // Check if mouse is over any scrollable UI panel - allow normal scrolling
+            for (const ui of scrollableUIs) {
+                if (ui.element && ui.element.classList.contains(ui.class)) {
+                    const rect = ui.element.getBoundingClientRect();
+                    if (e.clientX >= rect.left && e.clientX <= rect.right &&
+                        e.clientY >= rect.top && e.clientY <= rect.bottom) {
+                        // Mouse is over this UI panel - allow normal scrolling
+                        return; // Don't prevent default, allow normal scroll
+                    }
                 }
             }
             
@@ -2358,6 +3860,8 @@ class SpaceShooterGame {
         this.bossSpawned = false;
         this.currentBoss = null;
         this.bossPuzzleState = {};
+        // Reset cell membrane boss tracker to ensure clean state
+        this._cellBossTracker = undefined;
         
         // Disable mode switching buttons during boss battle
         document.querySelectorAll('.mode-btn')?.forEach(btn => {
@@ -2398,8 +3902,10 @@ class SpaceShooterGame {
         this.enemyShips = [];
         this.bossEnemies = [];
         this.enemyBullets = []; // Clear enemy bullets when entering boss mode
+        this.bullets = []; // Clear player bullets when entering boss mode
         this.targets = [];
         this.pairs = [];
+        this._cleanupNeeded = false; // Reset cleanup flag
         
         // Ensure canvas is ready
         this.resize();
@@ -2438,8 +3944,8 @@ class SpaceShooterGame {
         // Clear boss-specific entities
         this.obstacles = this.obstacles.filter(o => !o.isBoss);
         
-        // Return to main music with seamless crossfade
-        this.audio.playMusic('main', true, true);
+        // Return to main music with seamless crossfade (only if not in cutscene/paused)
+            this.startMainMusicIfAllowed({ fadeIn: true });
         
         // After boss is defeated, trigger level-up menu
         // The level was frozen during boss battle, so now we can show the level-up menu
@@ -2543,7 +4049,7 @@ class SpaceShooterGame {
                 health: 300 + this.level * 10,
                 vx: 0,
                 vy: 0,
-                color: '#ff6b6b',
+                color: '#4fc3f7', // Changed to blue
                 damage: 15,
                 lastHitTime: 0,
                 regenDelay: 5.0, // Longer delay before regeneration starts (5 seconds)
@@ -2792,7 +4298,7 @@ class SpaceShooterGame {
             health: 2000 + this.level * 40,
             vx: 0,
             vy: 0,
-            color: '#ffaa00',
+            color: '#4fc3f7', // Changed to blue
             damage: 30,
             lastHitTime: 0,
             regenDelay: 999999,
@@ -2814,7 +4320,7 @@ class SpaceShooterGame {
             health: 1800 + this.level * 35,
             vx: 0,
             vy: 0,
-            color: '#ff8800',
+            color: '#4fc3f7', // Changed to blue
             damage: 35,
             lastHitTime: 0,
             regenDelay: 999999,
@@ -2949,7 +4455,7 @@ class SpaceShooterGame {
                 x: Math.cos(angle) * radius,
                 y: Math.sin(angle) * radius,
                 radius: size * 0.2,
-                color: '#ff6b6b',
+                color: '#4fc3f7', // Changed to blue
                 isCore: false
             });
         }
@@ -2979,7 +4485,7 @@ class SpaceShooterGame {
                 x: Math.cos(angle) * radius,
                 y: Math.sin(angle) * radius,
                 radius: size * 0.15,
-                color: '#ffaa00',
+                color: '#4fc3f7', // Changed to blue
                 isCore: false
             });
         }
@@ -3476,7 +4982,7 @@ class SpaceShooterGame {
             return;
         }
 
-        // Bell mode guard: if the current puzzle target isn’t paired, create a pair instead of restarting
+        // Bell mode guard: if the current puzzle target isnâ€™t paired, create a pair instead of restarting
         if (this.mode === 'bell' && this.puzzleState.sequence && this.puzzleState.sequence.length > 0) {
             const currentId = this.puzzleState.sequence[this.puzzleState.progress];
             const hasPair = this.pairs.some(p =>
@@ -3684,7 +5190,8 @@ class SpaceShooterGame {
             speed: speed,
             health: health,
             maxHealth: health,
-            color: '#f44336'
+            color: '#f44336',
+            lungeState: { active: false, progress: 0, duration: 0, directionX: 0, directionY: 0, distance: 0 } // Lunge effect for collisions and bullet hits
         });
     }
     
@@ -3992,7 +5499,7 @@ class SpaceShooterGame {
             maxHealth: maxHealth,
             health: maxHealth,
             vx, vy,
-            color: '#ff4444',
+            color: '#4fc3f7', // Changed to blue
             damage: 10 + this.level,
             lastHitTime: 0,
             regenDelay: 3.0,
@@ -4001,6 +5508,9 @@ class SpaceShooterGame {
             rewardMultiplier: rewardMultiplier,
             atoms: this.generateMoleculeStructure(moleculeType, atomCount, baseSize)
         };
+        
+        // OPTIMIZATION: Initialize health bucket tracking for gradient caching
+        obstacle._lastHealthBucket = 1.0; // Start at 100% health bucket
         
         this.obstacles.push(obstacle);
     }
@@ -4382,7 +5892,7 @@ class SpaceShooterGame {
         }
         
         // Restart music if it was playing (in dev mode, music should continue)
-        if (this.audio && this.gameState === 'playing') {
+        if (this.audio && this.gameState === 'playing' && !this.cutsceneId && !this.isPaused) {
             // Only restart if music isn't already playing
             if (!this.audio.currentMusicElement || this.audio.currentMusicElement.paused) {
                 this.audio.playMusic('main', true, true);
@@ -5116,10 +6626,17 @@ class SpaceShooterGame {
         // Get weapon name from weapon object or default to 'basic'
         const weaponName = weapon.weaponName || 'basic';
         
-        // Individual System Core bullets should be smaller (reduce size by 25%)
-        let bulletSize = 4 + Math.floor(damage / 5); // Larger photons for higher energy
+        // Bullet size is constant - not affected by damage stats
+        // Size is based on weapon type only, not damage (damage can increase without affecting visual size)
+        let bulletSize = 5; // Base size for all bullets
         if (weaponName === 'individualSystemCore') {
-            bulletSize = Math.floor(bulletSize * 0.75); // Reduce Individual System Core bullet size by 25%
+            bulletSize = 4; // Individual System Core bullets are slightly smaller
+        } else if (weaponName === 'laser') {
+            bulletSize = 6; // Laser bullets are slightly larger
+        } else if (weaponName === 'deterministicEngine') {
+            bulletSize = 6; // High-tier weapons can have slightly larger bullets for visibility
+        } else if (weaponName === 'transformationPredictor') {
+            bulletSize = 5; // Standard size
         }
         
         // OPTIMIZATION: Object pooling - reuse bullet objects instead of creating new ones
@@ -5513,6 +7030,12 @@ class SpaceShooterGame {
             if (instructions) instructions.classList.add('paused');
             // Keep game state paused
             this.gameState = 'paused';
+            
+            // Show cursor in pause menu
+            if (this.canvas) {
+                this.canvas.style.cursor = 'default';
+            }
+            document.body.style.cursor = 'default';
         } else {
             // Hide all panels (except settings - it's independent)
             this.clearPauseUI();
@@ -5521,6 +7044,12 @@ class SpaceShooterGame {
                 this.showShopUI(false);
                 this._shopFromPause = false;
             }
+            
+            // Hide cursor when returning to gameplay
+            if (this.canvas) {
+                this.canvas.style.cursor = 'none';
+            }
+            document.body.style.cursor = 'none';
             
             // CRITICAL: Reset game loop timing when unpausing to prevent lag
             // This ensures deltaTime doesn't become huge after a long pause
@@ -5531,6 +7060,9 @@ class SpaceShooterGame {
             this.resumeSmoothing.active = true;
             this.resumeSmoothing.framesRemaining = 3;
             this.resumeSmoothing.targetDeltaTime = 0.016;
+
+        // Dev music guard - blocks auto music restarts until explicitly allowed
+        this._devMusicBlocked = false;
 
             // CRITICAL: Ensure game state returns to playing on unpause
             this.gameState = 'playing';
@@ -5577,9 +7109,24 @@ class SpaceShooterGame {
         if (ui.classList.contains('active')) {
             // Close settings
             ui.classList.remove('active');
+            
+            // Hide cursor when closing settings if returning to gameplay
+            if (this.gameState === 'playing' && !this.isPaused) {
+                if (this.canvas) {
+                    this.canvas.style.cursor = 'none';
+                }
+                document.body.style.cursor = 'none';
+            }
         } else {
             // Open settings
             ui.classList.add('active');
+            
+            // Show cursor in settings menu
+            if (this.canvas) {
+                this.canvas.style.cursor = 'default';
+            }
+            document.body.style.cursor = 'default';
+            
             this.updateSettingsUI();
         }
     }
@@ -6302,6 +7849,622 @@ class SpaceShooterGame {
             this.player.bossHitIntensity = this.player.bossHitEffect / 0.3; // Fade from 1.0 to 0.0 over 0.3 seconds
         }
         
+        // Update 3D wobble system
+        // Initialize wobble states if they don't exist (safety check)
+        if (!this.player.spinState) {
+            this.player.spinState = { active: false, progress: 0, duration: 0, directionX: 0, directionY: 0, spinDirection: 1 };
+        }
+        if (!this.player.lungeState) {
+            this.player.lungeState = { active: false, progress: 0, duration: 0, directionX: 0, directionY: 0, distance: 0 };
+        }
+        if (this.player.yaw === undefined) this.player.yaw = 0;
+        if (this.player.pitch === undefined) this.player.pitch = 0;
+        if (this.player.roll === undefined) this.player.roll = 0;
+        if (this.player.shrink === undefined) this.player.shrink = 1.0;
+        if (!this.player.screenShake) this.player.screenShake = { x: 0, y: 0, intensity: 0 };
+        if (this.player.hitFlash === undefined) this.player.hitFlash = 0;
+        if (this.player.glowIntensity === undefined) this.player.glowIntensity = 0;
+        if (!this.player.energyRipples) this.player.energyRipples = [];
+        
+        // Update spin effect (when hit by molecules - 2 full rotations)
+        if (this.player.spinState.active) {
+            const rawProgress = this.player.spinState.progress / this.player.spinState.duration;
+            
+            // Progressive spin: start fast, get faster, then slow down at the end
+            // No slow motion at the beginning - immediate fast spin
+            let timeMultiplier = 2.5; // Start fast (no slow motion)
+            
+            if (rawProgress < 0.4) {
+                // First 40%: Start fast and accelerate to very fast
+                const t = rawProgress / 0.4; // Normalize to 0-1 for first 40%
+                const aggressiveAccel = 1 - Math.pow(1 - t, 1.5); // Smooth acceleration curve
+                timeMultiplier = 2.5 + (4.5 - 2.5) * aggressiveAccel; // Accelerate from 2.5 to 4.5 (very fast!)
+            } else if (rawProgress < 0.8) {
+                // 40-80%: Continue at peak speed (maintain fast spin)
+                timeMultiplier = 4.5; // Maintain peak speed
+            } else {
+                // Last 20%: Slow down smoothly to stabilize and return to normal position
+                const t = (rawProgress - 0.8) / 0.2; // Normalize last 20% to 0-1
+                const smoothDecel = t * t * (3 - 2 * t); // Smoothstep for smooth deceleration
+                timeMultiplier = 4.5 - (4.5 - 0.3) * smoothDecel; // Decelerate from 4.5 to 0.3 (slow stabilization)
+            }
+            
+            this.player.spinState.progress += deltaTime * timeMultiplier;
+            const spinProgress = Math.min(1.0, this.player.spinState.progress / this.player.spinState.duration);
+            
+            // 2 full rotations = 4π radians
+            // 2 full rotations = doubled rate for faster spin, with direction based on hit side
+            const spinDir = this.player.spinState.spinDirection || 1; // Default to clockwise if not set
+            this.player.yaw = spinProgress * Math.PI * 4 * spinDir; // Apply spin direction (1 = clockwise, -1 = counter-clockwise)
+            
+            // Enhanced wobble with 3D perspective effect (coming toward viewer) - reduced for subtle wobble
+            const wobblePhase = spinProgress * Math.PI * 4; // Keep phase the same
+            const wobbleAmount = Math.sin(wobblePhase) * 0.1; // Reduced from 0.25 for less dramatic wobble
+            
+            this.player.pitch = wobbleAmount;
+            this.player.roll = Math.cos(wobblePhase) * 0.1; // Reduced from 0.25 for less dramatic wobble
+            
+            // Depth effect: ship recedes (smaller) → approaches (larger) → normal
+            // Create a wave that goes: small -> large -> normal
+            const depthWave = Math.sin(spinProgress * Math.PI * 2); // One full cycle
+            let depthScale = 1.0;
+            if (depthWave < -0.5) {
+                // Receding phase: shrink to 90% (going away) - halved again from 80%
+                const t = (depthWave + 1.0) / 0.5; // Map -1 to -0.5 -> 0 to 1
+                depthScale = 0.9 + (1.0 - 0.9) * t;
+            } else if (depthWave > 0.5) {
+                // Approaching phase: grow to 110% (coming toward) - halved again from 120%
+                const t = (depthWave - 0.5) / 0.5; // Map 0.5 to 1 -> 0 to 1
+                depthScale = 1.0 + (1.1 - 1.0) * t;
+            } else {
+                // Normal phase: transition between receding and approaching
+                const t = (depthWave + 0.5) / 1.0; // Map -0.5 to 0.5 -> 0 to 1
+                depthScale = 0.9 + (1.1 - 0.9) * t;
+            }
+            
+            // Stretch and shrink effects during wobble (more pronounced during fast spin phase)
+            const isFastSpin = rawProgress >= 0.4 && rawProgress < 0.8; // Fast spin phase (40-80%)
+            const stretchIntensity = isFastSpin ? 0.075 : 0.0375; // More stretch during fast spin phase
+            
+            // Stretch horizontally when wobbling (based on roll)
+            const stretchX = 1.0 + Math.abs(this.player.roll) * stretchIntensity;
+            // Stretch vertically when pitching (based on pitch)
+            const stretchY = 1.0 + Math.abs(this.player.pitch) * stretchIntensity;
+            
+            // Store stretch values for drawing
+            if (this.player.stretchX === undefined) this.player.stretchX = 1.0;
+            if (this.player.stretchY === undefined) this.player.stretchY = 1.0;
+            this.player.stretchX = stretchX;
+            this.player.stretchY = stretchY;
+            
+            // Combine depth effect with base shrink pulse - halved
+            const shrinkPulse = Math.abs(Math.sin(spinProgress * Math.PI * 12));
+            const baseShrink = 0.85 + shrinkPulse * 0.025; // Halved again from 0.05
+            this.player.shrink = baseShrink * depthScale; // Apply depth effect
+            
+            // Movement in direction molecule is traveling (like bullet lunge but less pronounced)
+            // Use the same direction variables as spin direction for consistency
+            if (this.player.spinState.directionX !== undefined && this.player.spinState.directionY !== undefined && 
+                (this.player.spinState.directionX !== 0 || this.player.spinState.directionY !== 0)) {
+                // Calculate movement similar to lunge but less pronounced
+                const movementDistance = 90; // Increased from 30 to make lunge more pronounced
+                // Use ease-out curve similar to lunge but gentler
+                const prevSpinProgress = Math.max(0, (this.player.spinState.progress - deltaTime * timeMultiplier) / this.player.spinState.duration);
+                const prevMovementEaseOut = 1 - Math.pow(1 - prevSpinProgress, 3);
+                const movementEaseOut = 1 - Math.pow(1 - spinProgress, 3); // Gentler than lunge (3rd power vs 4th)
+                const currentMovement = movementDistance * movementEaseOut;
+                const prevMovement = movementDistance * prevMovementEaseOut;
+                const movementDelta = currentMovement - prevMovement;
+                
+                // Apply movement based on molecule direction (same direction as molecule is traveling)
+                // Movement is more pronounced at the start and reduces as spin progresses
+                const movementFactor = (1 - spinProgress) * 0.8; // Increased from 0.6 to make movement more visible
+                this.player.x += this.player.spinState.directionX * movementDelta * movementFactor;
+                this.player.y += this.player.spinState.directionY * movementDelta * movementFactor;
+            }
+            
+            // Movement in direction molecule is traveling (like bullet lunge but less pronounced)
+            if (this.player.spinState.directionX !== undefined && this.player.spinState.directionY !== undefined) {
+                // Calculate movement distance (less pronounced than bullet lunge)
+                const movementDistance = 120; // Increased from 40 to make lunge more pronounced
+                // Use ease-out curve similar to lunge but gentler
+                const movementEaseOut = 1 - Math.pow(1 - spinProgress, 3); // Gentler than lunge (3rd power vs 4th)
+                const currentMovement = movementDistance * movementEaseOut;
+                
+                // Apply movement based on molecule direction (less pronounced than bullet lunge)
+                // Only apply during active spin, and gradually reduce as spin completes
+                const movementFactor = (1 - spinProgress) * 0.5; // Reduce movement as spin progresses
+                this.player.x += this.player.spinState.directionX * currentMovement * movementFactor * deltaTime;
+                this.player.y += this.player.spinState.directionY * currentMovement * movementFactor * deltaTime;
+            }
+            
+            // Visual glow effect during spin
+            if (this.player.glowIntensity === undefined) this.player.glowIntensity = 0;
+            this.player.glowIntensity = (1 - spinProgress) * 0.6;
+            
+            // Create multiple types of particles during spin for rich visual effects
+            if (Math.random() < 0.25) {
+                // Orange sparks
+                const angle = Math.random() * Math.PI * 2;
+                const dist = this.player.size * (1.2 + Math.random() * 0.5);
+                this.particles.push({
+                    x: this.player.x + Math.cos(angle) * dist,
+                    y: this.player.y + Math.sin(angle) * dist,
+                    vx: Math.cos(angle) * 40 + (Math.random() - 0.5) * 25,
+                    vy: Math.sin(angle) * 40 + (Math.random() - 0.5) * 25,
+                    lifetime: 0.24, // Tripled - 3x longer
+                    maxLifetime: 0.24,
+                    size: 2 + Math.random() * 2,
+                    color: '#4fc3f7', // Changed to blue
+                    alpha: 0.9
+                });
+            }
+            if (Math.random() < 0.15) {
+                // Blue energy particles
+                const angle = Math.random() * Math.PI * 2;
+                const dist = this.player.size * (1.0 + Math.random() * 0.4);
+                this.particles.push({
+                    x: this.player.x + Math.cos(angle) * dist,
+                    y: this.player.y + Math.sin(angle) * dist,
+                    vx: Math.cos(angle) * 35 + (Math.random() - 0.5) * 20,
+                    vy: Math.sin(angle) * 35 + (Math.random() - 0.5) * 20,
+                    lifetime: 0.18, // Tripled - 3x longer
+                    maxLifetime: 0.18,
+                    size: 1.5 + Math.random() * 1.5,
+                    color: '#4fc3f7',
+                    alpha: 0.7
+                });
+            }
+            if (Math.random() < 0.1) {
+                // White flash particles
+                const angle = Math.random() * Math.PI * 2;
+                const dist = this.player.size * 0.8;
+                this.particles.push({
+                    x: this.player.x + Math.cos(angle) * dist,
+                    y: this.player.y + Math.sin(angle) * dist,
+                    vx: Math.cos(angle) * 50,
+                    vy: Math.sin(angle) * 50,
+                    lifetime: 0.15, // Tripled - 3x longer
+                    maxLifetime: 0.15,
+                    size: 1 + Math.random(),
+                    color: '#ffffff',
+                    alpha: 1.0
+                });
+            }
+            
+            // Create single energy ripple effect (reduced frequency for performance)
+            if (Math.random() < 0.02 && this.player.energyRipples) { // Reduced frequency for fewer but more enhanced rings
+                this.player.energyRipples.push({
+                    x: this.player.x,
+                    y: this.player.y,
+                    radius: 0,
+                    maxRadius: this.player.size * 6, // Enhanced - doubled size
+                    life: 0.36, // Extended - 3x longer
+                    maxLife: 0.36,
+                });
+            }
+            
+            // Add rotation trail effect (visual rotation indicator)
+            if (Math.random() < 0.2) {
+                const trailAngle = this.player.yaw + Math.random() * Math.PI * 0.5;
+                const trailDist = this.player.size * 1.5;
+                this.particles.push({
+                    x: this.player.x + Math.cos(trailAngle) * trailDist,
+                    y: this.player.y + Math.sin(trailAngle) * trailDist,
+                    vx: Math.cos(trailAngle + Math.PI) * 25,
+                    vy: Math.sin(trailAngle + Math.PI) * 25,
+                        maxLifetime: 0.36,
+                    size: 1.5 + Math.random(),
+                    color: '#88ccff',
+                    alpha: 0.6
+                });
+            }
+            
+            // Add spinning energy rings (different from ripples)
+            if (Math.random() < 0.08) {
+                const ringAngle = this.player.yaw + Math.random() * Math.PI * 2;
+                const ringDist = this.player.size * 2;
+                for (let i = 0; i < 3; i++) {
+                    const angle = ringAngle + (i * Math.PI * 2 / 3);
+                    this.particles.push({
+                        x: this.player.x + Math.cos(angle) * ringDist,
+                        y: this.player.y + Math.sin(angle) * ringDist,
+                        vx: Math.cos(angle + Math.PI / 2) * 20,
+                        vy: Math.sin(angle + Math.PI / 2) * 20,
+                    lifetime: 0.36, // Tripled - 3x longer
+                    maxLifetime: 0.36,
+                    size: 2 + Math.random(),
+                    color: '#00ffff',
+                    alpha: 0.7
+                    });
+                }
+            }
+            
+            // Add color-shifting particles (different visual style)
+            if (Math.random() < 0.12) {
+                const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a8e6cf'];
+                const color = colors[Math.floor(Math.random() * colors.length)];
+                const angle = Math.random() * Math.PI * 2;
+                const dist = this.player.size * (1.5 + Math.random() * 0.8);
+                this.particles.push({
+                    x: this.player.x + Math.cos(angle) * dist,
+                    y: this.player.y + Math.sin(angle) * dist,
+                    vx: Math.cos(angle) * 45 + (Math.random() - 0.5) * 30,
+                    vy: Math.sin(angle) * 45 + (Math.random() - 0.5) * 30,
+                    lifetime: 0.36, // Tripled - 3x longer
+                    maxLifetime: 0.36,
+                    size: 2.5 + Math.random() * 1.5,
+                    color: color,
+                    alpha: 0.8
+                });
+            }
+            
+            // Add expanding circle effect (different from ripples - particle-based)
+            if (Math.random() < 0.1) {
+                const circleCount = 8;
+                for (let i = 0; i < circleCount; i++) {
+                    const angle = (Math.PI * 2 * i) / circleCount;
+                    this.particles.push({
+                        x: this.player.x,
+                        y: this.player.y,
+                        vx: Math.cos(angle) * 50,
+                        vy: Math.sin(angle) * 50,
+                        lifetime: 0.45, // Tripled - 3x longer
+                    maxLifetime: 0.12,
+                        size: 1.5 + Math.random(),
+                        color: '#4fc3f7', // Changed to blue
+                        alpha: 0.6
+                    });
+                }
+            }
+            
+            // Enhanced completion burst effect
+            if (spinProgress >= 0.95 && spinProgress < 1.0 && Math.random() < 0.3) {
+                // Final completion burst - enhanced particles
+                const burstCount = 12;
+                for (let i = 0; i < burstCount; i++) {
+                    const angle = (Math.PI * 2 * i) / burstCount;
+                    const speed = 80 + Math.random() * 40;
+                    this.particles.push({
+                        x: this.player.x,
+                        y: this.player.y,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed,
+                        lifetime: 0.12, // Tripled - 3x longer
+                    maxLifetime: 0.12,
+                        size: 2 + Math.random() * 2,
+                        color: i % 2 === 0 ? '#ffffff' : '#4fc3f7',
+                        alpha: 1.0
+                    });
+                }
+            }
+            
+            // Reset when complete
+            if (spinProgress >= 1.0) {
+                // Final completion explosion effect
+                const explosionCount = 15;
+                for (let i = 0; i < explosionCount; i++) {
+                    const angle = (Math.PI * 2 * i) / explosionCount + Math.random() * 0.2;
+                    const speed = 100 + Math.random() * 50;
+                    const colors = ['#ffffff', '#4fc3f7', '#88ccff', '#00bcd4']; // Changed to blue colors
+                    const color = colors[Math.floor(Math.random() * colors.length)];
+                    this.particles.push({
+                        x: this.player.x,
+                        y: this.player.y,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed,
+                        lifetime: 0.3, // Tripled - 3x longer
+                    maxLifetime: 0.15,
+                        size: 2.5 + Math.random() * 2.5,
+                        color: color,
+                        alpha: 1.0
+                    });
+                }
+                
+                // Reset all spin state immediately to prevent control glitches
+                this.player.spinState.active = false;
+                this.player.spinState.progress = 0;
+                this.player.spinState.duration = 0;
+                this.player.yaw = 0;
+                this.player.pitch = 0;
+                this.player.roll = 0;
+                this.player.shrink = 1.0;
+                this.player.stretchX = 1.0;
+                this.player.stretchY = 1.0;
+                this.player.glowIntensity = 0;
+            }
+        }
+        
+        // Update lunge effect (when hit by enemy bullets)
+        if (this.player.lungeState.active) {
+            const prevProgress = this.player.lungeState.progress;
+            this.player.lungeState.progress += deltaTime;
+            const lungeProgress = Math.min(1.0, this.player.lungeState.progress / this.player.lungeState.duration);
+            
+            // Enhanced elastic ease-out with stronger deceleration
+            const easeOut = 1 - Math.pow(1 - lungeProgress, 4); // Stronger deceleration (4th power)
+            const prevEaseOut = 1 - Math.pow(1 - prevProgress / this.player.lungeState.duration, 4);
+            const currentDistance = this.player.lungeState.distance * easeOut;
+            const prevDistance = this.player.lungeState.distance * prevEaseOut;
+            const distanceDelta = currentDistance - prevDistance;
+            
+            // Apply lunge movement (move by the delta distance this frame)
+            // Only apply movement if lunge is still active
+            if (this.player.lungeState.active) {
+                this.player.x += this.player.lungeState.directionX * distanceDelta;
+                this.player.y += this.player.lungeState.directionY * distanceDelta;
+            }
+            
+            // Moderate pitch/roll tilt during lunge
+            const baseTilt = (1 - lungeProgress) * 0.6; // Reduced for less dramatic
+            const wobbleTilt = Math.sin(lungeProgress * Math.PI * 6) * 0.1; // Reduced wobble
+            const tiltAmount = baseTilt + wobbleTilt;
+            this.player.pitch = this.player.lungeState.directionY * tiltAmount;
+            this.player.roll = this.player.lungeState.directionX * tiltAmount;
+            
+            // Moderate shrink effect
+            const shrinkAmount = 0.75 + (1 - lungeProgress) * 0.15; // Shrinks to 75% (less dramatic)
+            this.player.shrink = shrinkAmount;
+            
+            // Visual glow effect during lunge
+            if (this.player.glowIntensity === undefined) this.player.glowIntensity = 0;
+            this.player.glowIntensity = Math.pow(1 - lungeProgress, 2) * 0.5;
+            
+            // Create enhanced impact spark burst with multiple particle types
+            if (Math.random() < 0.35) {
+                // Red impact sparks
+                const sparkCount = 8;
+                for (let i = 0; i < sparkCount; i++) {
+                    const angle = (Math.PI * 2 * i) / sparkCount + Math.random() * 0.6;
+                    this.particles.push({
+                        x: this.player.x,
+                        y: this.player.y,
+                        vx: Math.cos(angle) * 70 + (Math.random() - 0.5) * 35,
+                        vy: Math.sin(angle) * 70 + (Math.random() - 0.5) * 35,
+                        lifetime: 0.08, // Reduced from 0.3
+                        maxlifetime: 0.08,
+                        size: 2.5 + Math.random() * 2,
+                        color: '#4fc3f7', // Changed to blue
+                        alpha: 0.95
+                    });
+                }
+            }
+            if (Math.random() < 0.2) {
+                // Orange trail particles in lunge direction
+                for (let i = 0; i < 4; i++) {
+                    const offset = i * 8;
+                    this.particles.push({
+                        x: this.player.x - this.player.lungeState.directionX * offset,
+                        y: this.player.y - this.player.lungeState.directionY * offset,
+                        vx: -this.player.lungeState.directionX * 80 + (Math.random() - 0.5) * 40,
+                        vy: -this.player.lungeState.directionY * 80 + (Math.random() - 0.5) * 40,
+                        lifetime: 0.06, // Short-lived
+                        maxLifetime: 0.04,
+                        size: 2 + Math.random() * 1.5,
+                        color: '#4fc3f7', // Changed to blue
+                        alpha: 0.8
+                    });
+                }
+            }
+            if (Math.random() < 0.15) {
+                // White flash burst at impact point
+                const flashCount = 5;
+                for (let i = 0; i < flashCount; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    this.particles.push({
+                        x: this.player.x - this.player.lungeState.directionX * 15,
+                        y: this.player.y - this.player.lungeState.directionY * 15,
+                        vx: Math.cos(angle) * 90,
+                        vy: Math.sin(angle) * 90,
+                        life: 0.05, // Very short flash
+                        maxLife: 0.05,
+                        size: 1.5 + Math.random() * 1,
+                        color: '#ffffff',
+                        alpha: 1.0
+                    });
+                }
+            }
+            
+            // Create single energy wave in lunge direction (reduced for performance)
+            if (Math.random() < 0.08 && this.player.energyRipples) { // Reduced from 0.2 to 0.08
+                this.player.energyRipples.push({
+                    x: this.player.x - this.player.lungeState.directionX * 25,
+                    y: this.player.y - this.player.lungeState.directionY * 25,
+                    radius: 0,
+                    maxRadius: this.player.size * 6, // Enhanced - doubled size
+                    life: 0.12, // Short-lived ripple
+                    maxLife: 0.06,
+                    color: '#ff6b6b'
+                });
+            }
+            
+            // Add velocity lines for speed effect
+            if (Math.random() < 0.3) {
+                const lineCount = 3;
+                for (let i = 0; i < lineCount; i++) {
+                    const offset = i * 12;
+                    const perpX = -this.player.lungeState.directionY;
+                    const perpY = this.player.lungeState.directionX;
+                    this.particles.push({
+                        x: this.player.x - this.player.lungeState.directionX * offset + perpX * (Math.random() - 0.5) * 10,
+                        y: this.player.y - this.player.lungeState.directionY * offset + perpY * (Math.random() - 0.5) * 10,
+                        vx: -this.player.lungeState.directionX * 120,
+                        vy: -this.player.lungeState.directionY * 120,
+                        life: 0.05,
+                        maxLife: 0.05,
+                        size: 1 + Math.random(),
+                        color: '#ffffff',
+                        alpha: 0.5
+                    });
+                }
+            }
+            
+            // Add impact shockwave particles (different from ripples)
+            if (Math.random() < 0.15) {
+                const shockCount = 6;
+                for (let i = 0; i < shockCount; i++) {
+                    const angle = (Math.PI * 2 * i) / shockCount + Math.random() * 0.3;
+                    this.particles.push({
+                        x: this.player.x - this.player.lungeState.directionX * 20,
+                        y: this.player.y - this.player.lungeState.directionY * 20,
+                        vx: Math.cos(angle) * 80 + (Math.random() - 0.5) * 40,
+                        vy: Math.sin(angle) * 80 + (Math.random() - 0.5) * 40,
+                        life: 0.06, // Short-lived
+                        maxLife: 0.06,
+                        size: 2.5 + Math.random() * 2,
+                        color: '#4fc3f7', // Changed to blue
+                        alpha: 0.9
+                    });
+                }
+            }
+            
+            // Add directional energy streaks
+            if (Math.random() < 0.2) {
+                for (let i = 0; i < 2; i++) {
+                    const offset = i * 15;
+                    this.particles.push({
+                        x: this.player.x - this.player.lungeState.directionX * offset,
+                        y: this.player.y - this.player.lungeState.directionY * offset,
+                        vx: -this.player.lungeState.directionX * 100,
+                        vy: -this.player.lungeState.directionY * 100,
+                        lifetime: 0.15,
+                        maxLifetime: 0.04,
+                        size: 3 + Math.random() * 2,
+                        color: '#4fc3f7', // Changed to blue
+                        alpha: 0.8
+                    });
+                }
+            }
+            
+            // Add impact debris particles
+            if (Math.random() < 0.12) {
+                const debrisCount = 5;
+                for (let i = 0; i < debrisCount; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    this.particles.push({
+                        x: this.player.x,
+                        y: this.player.y,
+                        vx: Math.cos(angle) * 60 + (Math.random() - 0.5) * 30,
+                        vy: Math.sin(angle) * 60 + (Math.random() - 0.5) * 30,
+                    lifetime: 0.08,
+                    maxlifetime: 0.08,
+                        size: 1.5 + Math.random() * 1.5,
+                        color: '#888888',
+                        alpha: 0.7
+                    });
+                }
+            }
+            
+            // Enhanced completion effect near end
+            if (lungeProgress >= 0.9 && lungeProgress < 1.0 && Math.random() < 0.4) {
+                // Deceleration particles
+                const decelCount = 8;
+                for (let i = 0; i < decelCount; i++) {
+                    const angle = Math.atan2(this.player.lungeState.directionY, this.player.lungeState.directionX) + Math.PI + (Math.random() - 0.5) * 0.8;
+                    this.particles.push({
+                        x: this.player.x,
+                        y: this.player.y,
+                        vx: Math.cos(angle) * 90,
+                        vy: Math.sin(angle) * 90,
+                        lifetime: 0.12, // Tripled - 3x longer
+                    maxLifetime: 0.12,
+                        size: 2 + Math.random() * 2,
+                        color: '#4fc3f7', // Changed to blue
+                        alpha: 0.9
+                    });
+                }
+            }
+            
+            // Reset when complete
+            if (lungeProgress >= 1.0) {
+                // Final impact completion burst
+                const completionCount = 10;
+                for (let i = 0; i < completionCount; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 70 + Math.random() * 50;
+                    const colors = ['#4fc3f7', '#88ccff', '#ffffff', '#00bcd4']; // Changed to blue colors
+                    const color = colors[Math.floor(Math.random() * colors.length)];
+                    this.particles.push({
+                        x: this.player.x,
+                        y: this.player.y,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed,
+                        lifetime: 0.3, // Tripled - 3x longer
+                    maxLifetime: 0.15,
+                        size: 2 + Math.random() * 2.5,
+                        color: color,
+                        alpha: 1.0
+                    });
+                }
+                
+                // Reset all lunge state immediately to prevent control glitches
+                this.player.lungeState.active = false;
+                this.player.lungeState.progress = 0;
+                this.player.lungeState.directionX = 0;
+                this.player.lungeState.directionY = 0;
+                this.player.lungeState.distance = 0;
+                this.player.pitch = 0;
+                this.player.roll = 0;
+                this.player.shrink = 1.0;
+                this.player.glowIntensity = 0;
+            }
+        }
+        
+        // Decay wobble effects when not active (smooth return to neutral)
+        if (!this.player.spinState.active && !this.player.lungeState.active) {
+            const decayRate = 5.0; // Decay speed
+            this.player.yaw *= Math.max(0, 1 - decayRate * deltaTime);
+            this.player.pitch *= Math.max(0, 1 - decayRate * deltaTime);
+            this.player.roll *= Math.max(0, 1 - decayRate * deltaTime);
+            
+            // Decay shrink back to 1.0
+            if (this.player.shrink !== undefined && this.player.shrink < 1.0) {
+                this.player.shrink = Math.min(1.0, this.player.shrink + decayRate * deltaTime * 0.5);
+            }
+            
+            // Decay screen shake
+            if (this.player.screenShake && this.player.screenShake.intensity > 0) {
+                this.player.screenShake.intensity *= Math.max(0, 1 - decayRate * deltaTime);
+                this.player.screenShake.x *= Math.max(0, 1 - decayRate * deltaTime);
+                this.player.screenShake.y *= Math.max(0, 1 - decayRate * deltaTime);
+            }
+            
+            // Decay hit flash
+            if (this.player.hitFlash > 0) {
+                this.player.hitFlash = Math.max(0, this.player.hitFlash - decayRate * deltaTime * 2);
+            }
+            
+            // Decay glow intensity
+            if (this.player.glowIntensity > 0) {
+                this.player.glowIntensity = Math.max(0, this.player.glowIntensity - decayRate * deltaTime * 1.5);
+            }
+            
+            // Update energy ripples
+            if (this.player.energyRipples) {
+                this.player.energyRipples = this.player.energyRipples.filter(ripple => {
+                    // Ensure life and maxLife exist, fallback to lifetime/maxLifetime if needed
+                    if (ripple.life === undefined && ripple.lifetime !== undefined) {
+                        ripple.life = ripple.lifetime;
+                        ripple.maxLife = ripple.maxLifetime || ripple.life;
+                    }
+                    ripple.life = Math.max(0, (ripple.life || 0) - deltaTime); // Ensure life never goes negative
+                    const maxLife = ripple.maxLife || ripple.maxLifetime || 1;
+                    ripple.radius = Math.max(0, ripple.maxRadius * (1 - (ripple.life || 0) / maxLife)); // Ensure radius never goes negative
+                    return ripple.life > 0;
+                });
+            }
+            
+            if (Math.abs(this.player.roll) < 0.01) this.player.roll = 0;
+            if (this.player.shrink !== undefined && Math.abs(this.player.shrink - 1.0) < 0.01) this.player.shrink = 1.0;
+            if (this.player.screenShake && this.player.screenShake.intensity < 0.1) {
+                this.player.screenShake.intensity = 0;
+                this.player.screenShake.x = 0;
+                this.player.screenShake.y = 0;
+            }
+            if (this.player.hitFlash < 0.01) this.player.hitFlash = 0;
+            if (this.player.glowIntensity < 0.01) this.player.glowIntensity = 0;
+        }
+        
         // Health regeneration (passive)
         if (this.playerStats.healthRegen > 0 && this.playerStats.health < this.playerStats.maxHealth) {
             this.playerStats.health = Math.min(
@@ -6556,6 +8719,32 @@ class SpaceShooterGame {
                                 damage *= this.playerStats.criticalHitDamage; // Use crit damage multiplier from upgrades
                             }
                             
+                            // Initialize lunge state if not present
+                            if (!enemy.lungeState) {
+                                enemy.lungeState = { active: false, progress: 0, duration: 0, directionX: 0, directionY: 0, distance: 0 };
+                            }
+                            
+                            // Add lunge effect to enemy ship when hit by bullet (less dramatic than player lunge)
+                            if (!enemy.lungeState.active && bullet.vx !== undefined && bullet.vy !== undefined) {
+                                // Calculate bullet direction
+                                const bulletSpeed = Math.sqrt(bullet.vx * bullet.vx + bullet.vy * bullet.vy);
+                                if (bulletSpeed > 0) {
+                                    const bulletDirectionX = bullet.vx / bulletSpeed;
+                                    const bulletDirectionY = bullet.vy / bulletSpeed;
+                                    
+                                    // Enemy lunge in bullet direction (less dramatic than player)
+                                    const enemyLungeDistance = 60; // Much smaller than player lunge (180)
+                                    enemy.lungeState = {
+                                        active: true,
+                                        progress: 0,
+                                        duration: 0.3, // Shorter duration than player (0.4)
+                                        directionX: bulletDirectionX,
+                                        directionY: bulletDirectionY,
+                                        distance: enemyLungeDistance
+                                    };
+                                }
+                            }
+                            
                             enemy.health -= damage;
                             this.audio.playSFX('enemyHit', 0.7);
                             this.createExplosion(bullet.x, bullet.y);
@@ -6676,7 +8865,22 @@ class SpaceShooterGame {
             if (!bulletHit) {
                 for (let obstacle of this.obstacles) {
                     // Skip destroyed obstacles so dead boss layers don't block shots
+                    // Enhanced check: skip if health is 0, marked for removal, or is a destroyed boss layer
                     if (obstacle.health !== undefined && obstacle.health <= 0) {
+                        continue;
+                    }
+                    if (obstacle._remove === true) {
+                        continue;
+                    }
+                    // Skip boss obstacles that can't take damage (destroyed layers waiting for cleanup)
+                    if (obstacle.isBoss && obstacle.canTakeDamage === false && 
+                        obstacle.health !== undefined && obstacle.health <= 0) {
+                        continue;
+                    }
+                    // Skip obstacles with extremely small size (destroyed boss layers set to 0.0001)
+                    // This catches destroyed layers that might have edge case health values
+                    if (obstacle.size !== undefined && obstacle.size < 1 && 
+                        obstacle.health !== undefined && obstacle.health <= 0) {
                         continue;
                     }
                     if (this.checkCollision(bullet, obstacle)) {
@@ -7594,6 +9798,62 @@ class SpaceShooterGame {
                         }
                         
                         this.createExplosion(obstacle.x, obstacle.y);
+                        
+                        // Trigger spin effect when hit by molecule (2 full rotations)
+                        // Spin direction based on hit side (opposite of molecule direction)
+                        // Movement in direction molecule is traveling (like bullet lunge but less pronounced)
+                        if (!obstacle.isBoss) {
+                            // Calculate direction from molecule velocity
+                            const moleculeSpeed = Math.sqrt(obstacle.vx * obstacle.vx + obstacle.vy * obstacle.vy);
+                            let directionX = 0;
+                            let directionY = 0;
+                            let spinDirection = 1; // Default clockwise
+                            
+                            if (moleculeSpeed > 0) {
+                                // Normalize velocity to get direction (this is the direction molecule is traveling/hitting from)
+                                directionX = obstacle.vx / moleculeSpeed;
+                                directionY = obstacle.vy / moleculeSpeed;
+                                
+                                // Spin direction should be based on the hit angle - spin opposite to the direction of impact
+                                // Calculate the angle the molecule is coming from
+                                const hitAngle = Math.atan2(obstacle.vy, obstacle.vx);
+                                
+                                // For spin direction: if hit from right (positive vx), spin counter-clockwise (negative yaw)
+                                // If hit from left (negative vx), spin clockwise (positive yaw)
+                                // Use the perpendicular angle to determine spin direction
+                                // The spin should be perpendicular to the impact direction
+                                // If molecule comes from right (0Â°), spin should be counter-clockwise (negative)
+                                // If molecule comes from left (180Â°), spin should be clockwise (positive)
+                                // If molecule comes from top (270Â°/-90Â°), spin should be based on horizontal component
+                                // If molecule comes from bottom (90Â°), spin should be based on horizontal component
+                                
+                                // Use cross product logic: spin direction based on which side of the ship is hit
+                                // Calculate relative position of molecule to player
+                                const dx = obstacle.x - this.player.x;
+                                const dy = obstacle.y - this.player.y;
+                                const relativeAngle = Math.atan2(dy, dx);
+                                
+                                // Spin direction: if hit from right side (positive dx), spin counter-clockwise
+                                // If hit from left side (negative dx), spin clockwise
+                                // This creates a natural "knocked" effect
+                                if (Math.abs(dx) > Math.abs(dy)) {
+                                    // Horizontal hit dominates - spin based on which side
+                                    spinDirection = dx > 0 ? -1 : 1; // Right side = counter-clockwise, left = clockwise
+                                } else {
+                                    // Vertical hit dominates - use horizontal component of velocity
+                                    spinDirection = obstacle.vx > 0 ? -1 : (obstacle.vx < 0 ? 1 : (obstacle.vy > 0 ? 1 : -1));
+                                }
+                            }
+                            
+                            this.player.spinState = {
+                                active: true,
+                                progress: 0,
+                                duration: 1.0, // 1 second for 2 full rotations
+                                directionX: directionX,
+                                directionY: directionY,
+                                spinDirection: spinDirection
+                            };
+                        }
                     }
                 }
                 
@@ -7801,18 +10061,94 @@ class SpaceShooterGame {
         // Update enemy ships (only when in Bell mode, but they persist in memory)
         if (this.mode === 'bell') {
             this.enemyShips = this.enemyShips.filter(enemy => {
-                // Move enemy toward player
-                const dx = this.player.x - enemy.x;
-                const dy = this.player.y - enemy.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist > 0) {
-                    enemy.x += (dx / dist) * enemy.speed * deltaTime;
-                    enemy.y += (dy / dist) * enemy.speed * deltaTime;
+                // Initialize lunge state if not present
+                if (!enemy.lungeState) {
+                    enemy.lungeState = { active: false, progress: 0, duration: 0, directionX: 0, directionY: 0, distance: 0 };
+                }
+                
+                // Update enemy lunge effect (similar to player lunge but less dramatic)
+                if (enemy.lungeState.active) {
+                    const prevProgress = enemy.lungeState.progress;
+                    enemy.lungeState.progress += deltaTime;
+                    const lungeProgress = Math.min(1.0, enemy.lungeState.progress / enemy.lungeState.duration);
+                    
+                    // Elastic ease-out with deceleration (less dramatic than player)
+                    const easeOut = 1 - Math.pow(1 - lungeProgress, 3); // 3rd power (less dramatic than player's 4th)
+                    const prevEaseOut = 1 - Math.pow(1 - prevProgress / enemy.lungeState.duration, 3);
+                    const currentDistance = enemy.lungeState.distance * easeOut;
+                    const prevDistance = enemy.lungeState.distance * prevEaseOut;
+                    const distanceDelta = currentDistance - prevDistance;
+                    
+                    // Apply lunge movement
+                    if (enemy.lungeState.active) {
+                        enemy.x += enemy.lungeState.directionX * distanceDelta;
+                        enemy.y += enemy.lungeState.directionY * distanceDelta;
+                    }
+                    
+                    // Reset when complete
+                    if (lungeProgress >= 1.0) {
+                        enemy.lungeState.active = false;
+                        enemy.lungeState.progress = 0;
+                        enemy.lungeState.directionX = 0;
+                        enemy.lungeState.directionY = 0;
+                        enemy.lungeState.distance = 0;
+                    }
+                }
+                
+                // Only move toward player if not lunging
+                if (!enemy.lungeState.active) {
+                    // Move enemy toward player
+                    const dx = this.player.x - enemy.x;
+                    const dy = this.player.y - enemy.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist > 0) {
+                        enemy.x += (dx / dist) * enemy.speed * deltaTime;
+                        enemy.y += (dy / dist) * enemy.speed * deltaTime;
+                    }
                 }
                 
                 // Keep enemy on screen
                 enemy.x = Math.max(enemy.size, Math.min(this.canvas.width - enemy.size, enemy.x));
                 enemy.y = Math.max(enemy.size, Math.min(this.canvas.height - enemy.size, enemy.y));
+                
+                // Check collision with player (both lunge slightly)
+                if (this.checkCollision(enemy, this.player) && !this.boostActive) {
+                    // Calculate collision direction (from enemy to player)
+                    const collisionDx = this.player.x - enemy.x;
+                    const collisionDy = this.player.y - enemy.y;
+                    const collisionDist = Math.sqrt(collisionDx * collisionDx + collisionDy * collisionDy);
+                    
+                    if (collisionDist > 0) {
+                        const normX = collisionDx / collisionDist;
+                        const normY = collisionDy / collisionDist;
+                        
+                        // Player lunge (away from enemy) - smaller than bullet lunge
+                        const playerLungeDistance = 80; // Increased from 40 for more noticeable collision effect
+                        if (!this.player.lungeState.active) {
+                            this.player.lungeState = {
+                                active: true,
+                                progress: 0,
+                                duration: 0.25, // Shorter duration
+                                directionX: normX,
+                                directionY: normY,
+                                distance: playerLungeDistance
+                            };
+                        }
+                        
+                        // Enemy lunge (away from player) - even smaller
+                        const enemyLungeDistance = 60; // Increased from 30 for more noticeable collision effect
+                        if (!enemy.lungeState.active) {
+                            enemy.lungeState = {
+                                active: true,
+                                progress: 0,
+                                duration: 0.25, // Shorter duration
+                                directionX: -normX, // Opposite direction
+                                directionY: -normY,
+                                distance: enemyLungeDistance
+                            };
+                        }
+                    }
+                }
                 
                 // Boost mode: Destroy enemy ships on contact
                 if (this.boostActive && this.checkCollision(enemy, this.player)) {
@@ -7932,6 +10268,27 @@ class SpaceShooterGame {
             
             // Check collision with player
             if (this.checkCollision(bullet, this.player)) {
+                // Trigger lunge effect when hit by enemy bullet (lunge in bullet direction)
+                // This happens regardless of boost/god mode for visual feedback
+                const bulletDirectionX = bullet.vx || 0;
+                const bulletDirectionY = bullet.vy || 0;
+                const bulletSpeed = Math.sqrt(bulletDirectionX * bulletDirectionX + bulletDirectionY * bulletDirectionY);
+                if (bulletSpeed > 0) {
+                    // Normalize direction
+                    const normX = bulletDirectionX / bulletSpeed;
+                    const normY = bulletDirectionY / bulletSpeed;
+                    // Lunge distance: reasonable distance (60 pixels)
+                    const lungeDistance = 180; // Doubled from 90 for even more dramatic effect
+                    this.player.lungeState = {
+                        active: true,
+                        progress: 0,
+                        duration: 0.4, // 0.4 seconds for lunge (slower, more controlled)
+                        directionX: normX,
+                        directionY: normY,
+                        distance: lungeDistance
+                    };
+                }
+                
                 // Boost mode: Invincibility - remove bullet but don't apply damage
                 if (this.boostActive) {
                     return true; // Remove bullet but don't apply damage
@@ -8154,35 +10511,71 @@ class SpaceShooterGame {
             // Outer membrane: ensure damageable; force-remove after 5s of no progress once ships are dead
             if (outer && !state.outerMembraneDestroyed) {
                 outer.canTakeDamage = true;
+                
+                // Track health changes (damage dealt)
                 if (t.outerLastHp === undefined || outer.health < t.outerLastHp - 1) {
                     t.outerLastHp = outer.health;
-                    t.outerLastChange = now;
-                } else if (allBossEnemiesDestroyed && now - (t.outerLastChange || now) > 5000) {
-                    outer.health = 0;
-                    outer._remove = true;
-                    this._cleanupNeeded = true;
-                    state.outerMembraneDestroyed = true;
-                    const innerMembrane = this.obstacles.find(o => o.isBoss && o.bossPart === 'innerMembrane');
-                    if (innerMembrane) innerMembrane.canTakeDamage = true;
-                    t.outerLastChange = now;
+                    // Reset timer when damage is dealt (only if ships are already dead)
+                    if (allBossEnemiesDestroyed) {
+                        t.outerTimerStart = now;
+                    }
+                }
+                
+                // Only start timer AFTER all ships are destroyed
+                if (allBossEnemiesDestroyed) {
+                    // Initialize timer start when ships first die
+                    if (t.outerTimerStart === undefined) {
+                        t.outerTimerStart = now;
+                    }
+                    
+                    // Auto-destroy only if 5 seconds have passed since ships died AND no damage was dealt
+                    // Check if health hasn't changed (no damage dealt) since timer started
+                    if (now - t.outerTimerStart > 5000 && 
+                        (t.outerLastHp === undefined || t.outerLastHp === outer.health)) {
+                        outer.health = 0;
+                        outer._remove = true;
+                        this._cleanupNeeded = true;
+                        state.outerMembraneDestroyed = true;
+                        const innerMembrane = this.obstacles.find(o => o.isBoss && o.bossPart === 'innerMembrane');
+                        if (innerMembrane) innerMembrane.canTakeDamage = true;
+                        t.outerTimerStart = undefined; // Reset for next layer
+                    }
                 }
             }
 
             // Inner membrane: ensure damageable; force-remove after 5s of no progress once outer is gone and ships dead
             if (inner && state.outerMembraneDestroyed && !state.innerMembraneDestroyed) {
                 inner.canTakeDamage = true;
+                
+                // Track health changes (damage dealt)
                 if (t.innerLastHp === undefined || inner.health < t.innerLastHp - 1) {
                     t.innerLastHp = inner.health;
-                    t.innerLastChange = now;
-                } else if (allBossEnemiesDestroyed && now - (t.innerLastChange || now) > 5000) {
-                    inner.health = 0;
-                    inner._remove = true;
-                    this._cleanupNeeded = true;
-                    state.innerMembraneDestroyed = true;
-                    state.nucleusVulnerable = true;
-                    const nucleus = this.obstacles.find(o => o.isBoss && o.bossPart === 'nucleus');
-                    if (nucleus) nucleus.canTakeDamage = true;
-                    t.innerLastChange = now;
+                    // Reset timer when damage is dealt (only if ships are already dead)
+                    if (allBossEnemiesDestroyed) {
+                        t.innerTimerStart = now;
+                    }
+                }
+                
+                // Only start timer AFTER all ships are destroyed AND outer membrane is destroyed
+                if (allBossEnemiesDestroyed) {
+                    // Initialize timer start when outer membrane is destroyed and ships are dead
+                    if (t.innerTimerStart === undefined) {
+                        t.innerTimerStart = now;
+                    }
+                    
+                    // Auto-destroy only if 5 seconds have passed since timer started AND no damage was dealt
+                    // Check if health hasn't changed (no damage dealt) since timer started
+                    if (now - t.innerTimerStart > 5000 && 
+                        (t.innerLastHp === undefined || t.innerLastHp === inner.health)) {
+                        inner.health = 0;
+                        inner._remove = true;
+                        this._cleanupNeeded = true;
+                        state.innerMembraneDestroyed = true;
+                        state.nucleusVulnerable = true;
+                        const nucleus = this.obstacles.find(o => o.isBoss && o.bossPart === 'nucleus');
+                        if (nucleus) nucleus.canTakeDamage = true;
+                        t.innerTimerStart = undefined; // Reset
+                    }
                 }
             }
         }
@@ -8316,6 +10709,10 @@ class SpaceShooterGame {
         } else if (ship.shape === 'triangle' || !ship.shape) {
             // Legacy triangle shape: extends 1.1 * shipSize forward, 0.8 backward, 0.7 sideways
             return shipSize * 1.1;
+        } else if (ship.shape === 'timeDecay') {
+            // Time decay atomic vessel: extends 1.2 forward (sharp nose), 0.9 backward (tail), 1.0 sideways (energy wings)
+            // Maximum extent is forward: shipSize * 1.2
+            return shipSize * 1.2;
         } else if (ship.shape === 'sleek') {
             // Atomic Fighter (basic): extends 1.4 forward (sharp nose), 1.0 backward (tail), 1.05 sideways (rocket pods)
             if (this.currentShip === 'basic') {
@@ -8656,6 +11053,24 @@ class SpaceShooterGame {
             continueUI.style.display = 'block';
         }
         
+        // CRITICAL: Show cursor in level-up menu
+        // Set canvas cursor to default so it's visible
+        if (this.canvas) {
+            this.canvas.style.cursor = 'default';
+        }
+        // Set body cursor to default
+        document.body.style.cursor = 'default';
+        // Set UI containers to show pointer cursor
+        if (craftingUI) {
+            craftingUI.style.cursor = 'default';
+        }
+        if (shopUI) {
+            shopUI.style.cursor = 'default';
+        }
+        
+        // Add mouse event handlers to show pointer cursor when hovering over buttons/blocks
+        this.setupLevelUpMenuCursorHandlers();
+        
         this.gameState = 'levelup';
         
         // Clear movement keys when opening level-up menu to prevent ship from moving
@@ -8683,6 +11098,93 @@ class SpaceShooterGame {
         console.log('[LevelUp] Level-up menu shown successfully');
     }
     
+    setupLevelUpMenuCursorHandlers() {
+        // Setup cursor handlers for level-up menu buttons and blocks
+        // Remove existing handlers if any
+        if (this._levelUpCursorHandlersSetup) {
+            this.removeLevelUpMenuCursorHandlers();
+        }
+        
+        // Get all interactive elements in crafting and shop panels
+        const craftingButtons = document.querySelectorAll('#craftingUI .craft-btn, #craftingUI .craft-item, #craftingUI .craft-block');
+        const shopButtons = document.querySelectorAll('#shopUI .shop-btn, #shopUI .shop-item, #shopUI .shop-block, #shopUI .craft-btn');
+        const continueButton = document.querySelector('#levelUpContinueUI button');
+        
+        // Function to set pointer cursor
+        const setPointerCursor = (e) => {
+            if (this.canvas) {
+                this.canvas.style.cursor = 'pointer';
+            }
+            document.body.style.cursor = 'pointer';
+            if (e.currentTarget) {
+                e.currentTarget.style.cursor = 'pointer';
+            }
+        };
+        
+        // Function to set default cursor
+        const setDefaultCursor = (e) => {
+            if (this.canvas) {
+                this.canvas.style.cursor = 'default';
+            }
+            document.body.style.cursor = 'default';
+        };
+        
+        // Add handlers to all buttons and blocks
+        [...craftingButtons, ...shopButtons].forEach(element => {
+            element.addEventListener('mouseenter', setPointerCursor);
+            element.addEventListener('mouseleave', setDefaultCursor);
+            // Also set cursor style directly on element
+            element.style.cursor = 'pointer';
+        });
+        
+        // Add handler to continue button
+        if (continueButton) {
+            continueButton.addEventListener('mouseenter', setPointerCursor);
+            continueButton.addEventListener('mouseleave', setDefaultCursor);
+            continueButton.style.cursor = 'pointer';
+        }
+        
+        // Also handle mouseover on the entire UI containers
+        const craftingUI = this._cachedElements.craftingUI;
+        const shopUI = this._cachedElements.shopUI;
+        
+        if (craftingUI) {
+            craftingUI.addEventListener('mouseenter', () => {
+                if (this.canvas) {
+                    this.canvas.style.cursor = 'default';
+                }
+                document.body.style.cursor = 'default';
+            });
+        }
+        
+        if (shopUI) {
+            shopUI.addEventListener('mouseenter', () => {
+                if (this.canvas) {
+                    this.canvas.style.cursor = 'default';
+                }
+                document.body.style.cursor = 'default';
+            });
+        }
+        
+        this._levelUpCursorHandlersSetup = true;
+    }
+    
+    removeLevelUpMenuCursorHandlers() {
+        // Remove cursor handlers when leaving level-up menu
+        const craftingButtons = document.querySelectorAll('#craftingUI .craft-btn, #craftingUI .craft-item, #craftingUI .craft-block');
+        const shopButtons = document.querySelectorAll('#shopUI .shop-btn, #shopUI .shop-item, #shopUI .shop-block, #shopUI .craft-btn');
+        const continueButton = document.querySelector('#levelUpContinueUI button');
+        
+        // Note: We can't easily remove anonymous functions, but we'll reset cursor styles
+        [...craftingButtons, ...shopButtons, continueButton].forEach(element => {
+            if (element) {
+                element.style.cursor = '';
+            }
+        });
+        
+        this._levelUpCursorHandlersSetup = false;
+    }
+    
     continueFromLevelUp() {
         // Close level-up menu and resume gameplay
         this.levelUpState = false;
@@ -8690,6 +11192,15 @@ class SpaceShooterGame {
         
         // Remove level-up class from body
         document.body.classList.remove('level-up');
+        
+        // Remove cursor handlers
+        this.removeLevelUpMenuCursorHandlers();
+        
+        // Restore canvas cursor to none (hidden during gameplay)
+        if (this.canvas) {
+            this.canvas.style.cursor = 'none';
+        }
+        document.body.style.cursor = 'none';
         
         // OPTIMIZATION: Use cached DOM elements
         const craftingUI = this._cachedElements.craftingUI;
@@ -8700,9 +11211,11 @@ class SpaceShooterGame {
         
         if (craftingUI) {
             craftingUI.classList.remove('active');
+            craftingUI.style.cursor = '';
         }
         if (shopUI) {
             shopUI.classList.remove('active');
+            shopUI.style.cursor = '';
         }
         if (continueUI) {
             continueUI.style.display = 'none';
@@ -8714,6 +11227,19 @@ class SpaceShooterGame {
         
         // Clear gamepad selection highlights
         this.clearGamepadSelection();
+        
+        // If dev mode music reset was pending (from level control), start it now
+        if (this._devMusicResetPending || this._devMusicBlocked) {
+            this._devMusicResetPending = false;
+            this._devMusicBlocked = false;
+            // Longer delay to ensure menu is fully closed and any cleanup is complete
+            setTimeout(() => {
+                // Stop any lingering audio before restart
+                this.stopAllMusic('dev level menu cleanup');
+                console.log('[DEV] Starting music after level-up menu closed');
+                this.startMainMusicIfAllowed({ forceRestart: true, fadeIn: false });
+            }, 150); // Increased delay to ensure cleanup completes
+        }
     }
     
     clearGamepadSelection() {
@@ -8756,6 +11282,12 @@ class SpaceShooterGame {
             this.gameState = 'playing';
             ui.classList.remove('active');
             
+            // Hide cursor when returning to gameplay
+            if (this.canvas) {
+                this.canvas.style.cursor = 'none';
+            }
+            document.body.style.cursor = 'none';
+            
             // CRITICAL: Reset game loop timing when closing inventory to prevent lag
             // This ensures deltaTime doesn't become huge after being in inventory
             this.lastTime = performance.now();
@@ -8768,6 +11300,13 @@ class SpaceShooterGame {
             this.clearMovementKeys();
             this.gameState = 'inventory';
             ui.classList.add('active');
+            
+            // Show cursor in inventory menu
+            if (this.canvas) {
+                this.canvas.style.cursor = 'default';
+            }
+            document.body.style.cursor = 'default';
+            
             this.updateInventoryUI();
         }
     }
@@ -8877,10 +11416,10 @@ class SpaceShooterGame {
                 
                 const shipStats = this.equipmentStats.ships[ship];
                 const isEquipped = this.currentShip === ship;
-                const bonusText = shipStats.bonus === 'speedBoost' ? '⚡ Speed Boost' :
-                                 shipStats.bonus === 'rapidFire' ? '🔥 Rapid Fire' :
-                                 shipStats.bonus === 'damageResist' ? '🛡️ Damage Resist' :
-                                 shipStats.bonus === 'evasion' ? '✨ Evasion' : '';
+                const bonusText = shipStats.bonus === 'speedBoost' ? 'Speed Boost' :
+                                 shipStats.bonus === 'rapidFire' ? 'ðŸ”¥ Rapid Fire' :
+                                 shipStats.bonus === 'damageResist' ? 'Damage Resist' :
+                                 shipStats.bonus === 'evasion' ? 'Evasion' : '';
                 const item = document.createElement('div');
                 item.className = 'craft-item';
                 item.innerHTML = `
@@ -9503,6 +12042,8 @@ class SpaceShooterGame {
         if (type === 'ships') {
             if (name === 'individualStabilizer' && this.level < 35) {
                 return false; // Individual Stabilizer requires level 35
+            } else if (name === 'timeDecayAtomicVessel' && this.level < 47) {
+                return false; // Time Decay Atomic Vessel requires level 47
             } else if (name === 'completeDescriptionVessel' && this.level < 60) {
                 return false; // Complete Description Vessel requires level 60
             }
@@ -10156,11 +12697,18 @@ class SpaceShooterGame {
             case 'speed':
                 // Cap speed based on ship type
                 // Basic ship: max 650 (150 + 500), all other ships: baseSpeed + 600
+                // Special ships: individualStabilizer max 1000, completeDescriptionVessel max 1100
                 // This allows players to keep up with late-game molecules (830-1200 speed)
                 // Basic ship: 650 max, Fast ship: 220 + 600 = 820, etc.
                 let maxSpeed;
                 if (this.currentShip === 'basic') {
                     maxSpeed = 650; // Special cap for basic ship
+                } else if (this.currentShip === 'individualStabilizer') {
+                    maxSpeed = 1000; // Special cap for individualStabilizer
+                } else if (this.currentShip === 'timeDecayAtomicVessel') {
+                    maxSpeed = 1050; // Special cap for time decay atomic vessel
+                } else if (this.currentShip === 'completeDescriptionVessel') {
+                    maxSpeed = 1100; // Special cap for completeDescriptionVessel
                 } else {
                     maxSpeed = this.playerStats.baseSpeed + 600; // Standard cap for all other ships
                 }
@@ -10455,6 +13003,9 @@ class SpaceShooterGame {
         }
         
         ui.classList.add('active');
+        // Ensure cursor is visible in menu
+        if (ui) ui.style.cursor = 'default';
+        document.body.style.cursor = 'default';
         this.updateCraftingUI();
     }
 
@@ -10469,6 +13020,9 @@ class SpaceShooterGame {
                 this._shopPrevPaused = true;
             }
             ui.classList.add('active');
+            // Ensure cursor is visible in menu
+            if (ui) ui.style.cursor = 'default';
+            document.body.style.cursor = 'default';
             this.updateShopUI();
         } else {
             ui.classList.remove('active');
@@ -10478,6 +13032,13 @@ class SpaceShooterGame {
                 this._shopFromPause = false;
                 this.isPaused = false;
                 this.gameState = 'playing';
+                
+                // Hide cursor when returning to gameplay
+                if (this.canvas) {
+                    this.canvas.style.cursor = 'none';
+                }
+                document.body.style.cursor = 'none';
+                
                 const mainUi = this._cachedElements.ui;
                 const theoryPanel = this._cachedElements.theoryPanel;
                 const instructions = this._cachedElements.instructions;
@@ -10582,7 +13143,7 @@ class SpaceShooterGame {
                 // Check level requirements
                 let levelRequired = 0;
                 if (weapon === 'rapid') levelRequired = 3;
-                else if (weapon === 'spread') levelRequired = 20;
+                else if (weapon === 'spread') levelRequired = 40;
                 else if (weapon === 'laser') levelRequired = 10;
                 else if (weapon === 'automatic') levelRequired = 15;
                 else if (weapon === 'transformationPredictor') levelRequired = 30;
@@ -10619,17 +13180,22 @@ class SpaceShooterGame {
                 const recipe = this.recipes.ships[ship];
                 // Check level requirements
                 let levelRequired = 0;
-                if (ship === 'rapid') levelRequired = 5; // Enhanced rapid ship requires level 5
+                if (ship === 'fast') levelRequired = 3;
+                else if (ship === 'tank') levelRequired = 2;
+                else if (ship === 'agile') levelRequired = 4;
+                else if (ship === 'rapid') levelRequired = 5; // Enhanced rapid ship requires level 5
                 else if (ship === 'individualStabilizer') levelRequired = 35;
+                else if (ship === 'timeDecayAtomicVessel') levelRequired = 47;
                 else if (ship === 'completeDescriptionVessel') levelRequired = 60;
                 const hasLevel = this.level >= levelRequired;
                 const canCraft = hasLevel && Object.keys(recipe).every(mat => this.inventory[mat] >= recipe[mat]);
                 const shipStats = this.equipmentStats.ships[ship];
-                const bonusText = shipStats.bonus === 'speedBoost' ? '⚡ Speed Boost' :
-                                 shipStats.bonus === 'damageResist' ? '🛡️ Damage Resist' :
-                                 shipStats.bonus === 'evasion' ? '✨ Evasion' :
-                                 shipStats.bonus === 'stabilized' ? '🔬 Stabilized' :
-                                 shipStats.bonus === 'complete' ? '⚛️ Complete' : '';
+                const bonusText = shipStats.bonus === 'speedBoost' ? 'Speed Boost' :
+                                 shipStats.bonus === 'damageResist' ? 'Damage Resist' :
+                                 shipStats.bonus === 'evasion' ? 'Evasion' :
+                                 shipStats.bonus === 'stabilized' ? 'Stabilized' :
+                                 shipStats.bonus === 'timeDecay' ? 'Time Decay' :
+                                 shipStats.bonus === 'complete' ? 'Complete' : '';
                 const item = document.createElement('div');
                 item.className = 'craft-item';
                 item.innerHTML = `
@@ -10657,7 +13223,10 @@ class SpaceShooterGame {
                 const recipe = this.recipes.shields[shield];
                 // Check level requirements
                 let levelRequired = 0;
-                if (shield === 'ontologicalReality') levelRequired = 40;
+                if (shield === 'basic') levelRequired = 1;
+                else if (shield === 'reinforced') levelRequired = 5;
+                else if (shield === 'quantum') levelRequired = 20;
+                else if (shield === 'ontologicalReality') levelRequired = 40;
                 else if (shield === 'individualSystemBarrier') levelRequired = 70;
                 const hasLevel = this.level >= levelRequired;
                 const canCraft = hasLevel && Object.keys(recipe).every(mat => this.inventory[mat] >= recipe[mat]);
@@ -10691,7 +13260,8 @@ class SpaceShooterGame {
                 const recipe = this.recipes.upgrades[upgrade];
                 // Check level requirements
                 let levelRequired = 0;
-                if (upgrade === 'completeDescriptionMatrix') levelRequired = 35;
+                if (upgrade === 'autoCollector') levelRequired = 70;
+                else if (upgrade === 'completeDescriptionMatrix') levelRequired = 35;
                 else if (upgrade === 'transformationTimeScanner') levelRequired = 40;
                 else if (upgrade === 'ensembleBypass') levelRequired = 65;
                 else if (upgrade === 'individualSystemAmplifier') levelRequired = 80;
@@ -10794,12 +13364,12 @@ class SpaceShooterGame {
                             ${Object.keys(recipe).map(mat => `${this.getMaterialDisplayName(mat)}: ${recipe[mat]}`).join(', ')}
                         </div>
                         ${currentLevel > 0 ? `<div style="font-size: 0.85em; color: #4fc3f7; margin-top: 5px;">Current: Tier ${currentLevel}</div>` : ''}
-                        ${currentLevel === 0 ? `<div style="font-size: 0.85em; color: #ff9800; margin-top: 5px;">⚠️ Must upgrade tiers in order</div>` : ''}
+                        ${currentLevel === 0 ? `<div style="font-size: 0.85em; color: #ff9800; margin-top: 5px;">âš ï¸ Must upgrade tiers in order</div>` : ''}
                     </div>
                     <button class="craft-btn" ${!canUpgrade || (weapon === 'automatic' && this.level < 50) ? 'disabled' : ''} tabindex="-1" onclick="event.stopPropagation(); event.preventDefault(); game.upgradeWeapon('${weapon}', ${nextTier}); game.updateCraftingUI();">
                         Upgrade to Tier ${nextTier}
                     </button>
-                    ${weapon === 'automatic' && this.level < 50 ? `<div style="font-size: 0.85em; color: #ff9800; margin-top: 5px;">⚠️ Requires Level 50</div>` : ''}
+                    ${weapon === 'automatic' && this.level < 50 ? `<div style="font-size: 0.85em; color: #ff9800; margin-top: 5px;">âš ï¸ Requires Level 50</div>` : ''}
                 `;
                 weaponUpgradesList.appendChild(item);
             }
@@ -10882,7 +13452,7 @@ class SpaceShooterGame {
             
             // Add header for Repair Station section
             const repairHeader = document.createElement('h3');
-            repairHeader.textContent = '🔧 Repair Station';
+            repairHeader.textContent = 'Repair Station';
             repairHeader.style.color = '#4caf50';
             repairHeader.style.marginTop = '30px';
             repairHeader.style.marginBottom = '15px';
@@ -11122,7 +13692,7 @@ class SpaceShooterGame {
                     foodList.style.borderTop = '2px solid #4fc3f7';
                     
                     const foodHeader = document.createElement('h3');
-                    foodHeader.textContent = '🍽️ Food Crafting (Survival System)';
+                    foodHeader.textContent = 'Food Crafting (Survival System)';
                     foodHeader.style.color = '#ff9800';
                     foodHeader.style.marginBottom = '15px';
                     foodList.appendChild(foodHeader);
@@ -11183,7 +13753,7 @@ class SpaceShooterGame {
                             <div style="font-size: 0.9em; color: #aaa; margin-top: 5px;">
                                 ${Object.keys(recipe).map(mat => `${this.getMaterialDisplayName(mat)}: ${recipe[mat]}`).join(', ')}
                             </div>
-                            ${ownedCount > 0 ? `<div style="font-size: 0.85em; color: #4caf50; margin-top: 5px;">✓ Owned: ${ownedCount}</div>` : ''}
+                            ${ownedCount > 0 ? `<div style="font-size: 0.85em; color: #4caf50; margin-top: 5px;">âœ“ Owned: ${ownedCount}</div>` : ''}
                         </div>
                         <button class="craft-btn" ${!canCraft ? 'disabled' : ''} tabindex="-1" onclick="event.stopPropagation(); event.preventDefault(); game.craftFood('${foodName}'); game.updateCraftingUI();">
                             Craft
@@ -11548,30 +14118,30 @@ class SpaceShooterGame {
             };
             
             const upgrades = [
-                { name: '⚡ Speed', stat: 'speed', requiredLevel: statRequiredLevels.speed, cost: Math.floor((10 + (speedUpgrades * 5)) * baseCostMultiplier), current: this.playerStats.speed, description: `Current: ${this.playerStats.speed} (Next: +30)`, category: 'combat' },
-                { name: '🔥 Fire Rate', stat: 'fireRate', requiredLevel: statRequiredLevels.fireRate, cost: Math.floor((15 + (fireRateUpgrades * 5)) * baseCostMultiplier), current: this.playerStats.fireRate.toFixed(2), description: `Current: ${this.playerStats.fireRate.toFixed(2)}/s (Next: +0.2/s)`, category: 'combat' },
-                { name: '💥 Damage', stat: 'damage', requiredLevel: statRequiredLevels.damage, cost: Math.floor((20 + (this.upgradeLevels.damage || 0) * 5) * baseCostMultiplier), current: this.playerStats.damage, description: `Base: ${this.playerStats.baseDamage} → Current: ${this.playerStats.damage} (Next: +2)`, category: 'combat' },
-                { name: '🚀 Projectile Speed', stat: 'projectileSpeed', requiredLevel: statRequiredLevels.projectileSpeed, cost: Math.floor((20 + (this.upgradeLevels.projectileSpeed || 0) * 5) * baseCostMultiplier), current: this.playerStats.projectileSpeed.toFixed(1) + '%', description: `Current: +${this.playerStats.projectileSpeed.toFixed(1)}% (Next: +10%)`, category: 'combat' },
-                { name: '🎯 Critical Hit Chance', stat: 'criticalHitChance', requiredLevel: statRequiredLevels.criticalHitChance, cost: Math.floor((30 + (this.upgradeLevels.criticalHitChance || 0) * 5) * baseCostMultiplier), current: this.playerStats.criticalHitChance.toFixed(1) + '%', description: `Current: ${this.playerStats.criticalHitChance.toFixed(1)}% (Next: +2%, Max: 100%)`, category: 'combat' },
-                { name: '⚔️ Critical Hit Damage', stat: 'criticalHitDamage', requiredLevel: statRequiredLevels.criticalHitDamage, cost: Math.floor((35 + (this.upgradeLevels.criticalHitDamage || 0) * 5) * baseCostMultiplier), current: this.playerStats.criticalHitDamage.toFixed(2) + 'x', description: `Current: ${this.playerStats.criticalHitDamage.toFixed(2)}x (Next: +0.05x)`, category: 'combat' },
-                { name: '🛡️ Shield Capacity', stat: 'shieldCapacityBonus', requiredLevel: statRequiredLevels.shieldCapacityBonus, cost: Math.floor((30 + (this.upgradeLevels.shieldCapacityBonus || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.shieldCapacityBonus || 0)), current: this.playerStats.shieldCapacityBonus.toFixed(1) + '%', description: `Current: +${this.playerStats.shieldCapacityBonus.toFixed(1)}% (Next: +5%, Max: 100%)`, category: 'defense' },
-                { name: '🔋 Shield Regeneration', stat: 'shieldRegenBonus', requiredLevel: statRequiredLevels.shieldRegenBonus, cost: Math.floor((35 + (this.upgradeLevels.shieldRegenBonus || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.shieldRegenBonus || 0)), current: this.playerStats.shieldRegenBonus.toFixed(1) + '/s', description: `Current: +${this.playerStats.shieldRegenBonus.toFixed(1)}/s (Next: +1/s)`, category: 'defense' },
-                { name: '🛡️ Damage Reduction', stat: 'damageReduction', requiredLevel: statRequiredLevels.damageReduction, cost: Math.floor((40 + (this.upgradeLevels.damageReduction || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.damageReduction || 0)), current: this.playerStats.damageReduction.toFixed(1) + '%', description: `Current: ${this.playerStats.damageReduction.toFixed(1)}% (Next: +1%, Max: 50%)`, category: 'defense' },
-                { name: '✨ Evasion', stat: 'evasion', requiredLevel: statRequiredLevels.evasion, cost: Math.floor((40 + (this.upgradeLevels.evasion || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.evasion || 0)), current: this.playerStats.evasion.toFixed(1) + '%', description: `Current: ${this.playerStats.evasion.toFixed(1)}% (Next: +1%, Max: 30%)`, category: 'defense' },
-                { name: '💎 Material Drop Rate', stat: 'materialDropRate', requiredLevel: statRequiredLevels.materialDropRate, cost: Math.floor((25 + (this.upgradeLevels.materialDropRate || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.materialDropRate || 0)), current: this.playerStats.materialDropRate.toFixed(1) + '%', description: `Current: +${this.playerStats.materialDropRate.toFixed(1)}% (Next: +5%)`, category: 'economy' },
-                { name: '💰 Token Drop Rate', stat: 'tokenDropRate', requiredLevel: statRequiredLevels.tokenDropRate, cost: Math.floor((30 + (this.upgradeLevels.tokenDropRate || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.tokenDropRate || 0)), current: this.playerStats.tokenDropRate.toFixed(1) + '%', description: `Current: +${this.playerStats.tokenDropRate.toFixed(1)}% (Next: +5%)`, category: 'economy' },
-                { name: '⏱️ Level Time Reduction', stat: 'levelTimeReduction', requiredLevel: statRequiredLevels.levelTimeReduction, cost: Math.floor((45 + (this.upgradeLevels.levelTimeReduction || 0) * 7) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.levelTimeReduction || 0)), current: this.playerStats.levelTimeReduction.toFixed(1) + '%', description: `Current: -${this.playerStats.levelTimeReduction.toFixed(1)}% time per level (Next: -3%, Max: 40% = 18s per level)`, category: 'economy' },
-                { name: '❤️ Max Health', stat: 'maxHealth', requiredLevel: statRequiredLevels.maxHealth, cost: Math.floor((25 + (this.upgradeLevels.maxHealth || 0) * 5) * baseCostMultiplier), current: this.playerStats.maxHealth, description: `Current: ${this.playerStats.maxHealth} HP (Next: +10)`, category: 'quality' },
-                { name: '💚 Health Regeneration', stat: 'healthRegen', requiredLevel: statRequiredLevels.healthRegen, cost: Math.floor((30 + (this.upgradeLevels.healthRegen || 0) * 5) * baseCostMultiplier), current: this.playerStats.healthRegen.toFixed(1) + ' HP/s', description: `Current: ${this.playerStats.healthRegen.toFixed(1)} HP/s (Next: +0.5 HP/s)`, category: 'quality' },
-                { name: '💉 Health Pack', stat: 'health', requiredLevel: statRequiredLevels.health, cost: Math.floor((20 + (healthPacksOwned * 5)) * baseCostMultiplier), current: healthPacksOwned, description: `Owned: ${healthPacksOwned} packs (Restores 50 HP each)`, category: 'consumable' }
+                { name: 'Speed', stat: 'speed', requiredLevel: statRequiredLevels.speed, cost: Math.floor((10 + (speedUpgrades * 5)) * baseCostMultiplier), current: this.playerStats.speed, description: `Current: ${this.playerStats.speed} (Next: +30)`, category: 'combat' },
+                { name: 'Fire Rate', stat: 'fireRate', requiredLevel: statRequiredLevels.fireRate, cost: Math.floor((15 + (fireRateUpgrades * 5)) * baseCostMultiplier), current: this.playerStats.fireRate.toFixed(2), description: `Current: ${this.playerStats.fireRate.toFixed(2)}/s (Next: +0.2/s)`, category: 'combat' },
+                { name: 'Damage', stat: 'damage', requiredLevel: statRequiredLevels.damage, cost: Math.floor((20 + (this.upgradeLevels.damage || 0) * 5) * baseCostMultiplier), current: this.playerStats.damage, description: `Base: ${this.playerStats.baseDamage} → Current: ${this.playerStats.damage} (Next: +2)`, category: 'combat' },
+                { name: 'Projectile Speed', stat: 'projectileSpeed', requiredLevel: statRequiredLevels.projectileSpeed, cost: Math.floor((20 + (this.upgradeLevels.projectileSpeed || 0) * 5) * baseCostMultiplier), current: this.playerStats.projectileSpeed.toFixed(1) + '%', description: `Current: +${this.playerStats.projectileSpeed.toFixed(1)}% (Next: +10%)`, category: 'combat' },
+                { name: 'Critical Hit Chance', stat: 'criticalHitChance', requiredLevel: statRequiredLevels.criticalHitChance, cost: Math.floor((30 + (this.upgradeLevels.criticalHitChance || 0) * 5) * baseCostMultiplier), current: this.playerStats.criticalHitChance.toFixed(1) + '%', description: `Current: ${this.playerStats.criticalHitChance.toFixed(1)}% (Next: +2%, Max: 100%)`, category: 'combat' },
+                { name: 'Critical Hit Damage', stat: 'criticalHitDamage', requiredLevel: statRequiredLevels.criticalHitDamage, cost: Math.floor((35 + (this.upgradeLevels.criticalHitDamage || 0) * 5) * baseCostMultiplier), current: this.playerStats.criticalHitDamage.toFixed(2) + 'x', description: `Current: ${this.playerStats.criticalHitDamage.toFixed(2)}x (Next: +0.05x)`, category: 'combat' },
+                { name: 'Shield Capacity', stat: 'shieldCapacityBonus', requiredLevel: statRequiredLevels.shieldCapacityBonus, cost: Math.floor((30 + (this.upgradeLevels.shieldCapacityBonus || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.shieldCapacityBonus || 0)), current: this.playerStats.shieldCapacityBonus.toFixed(1) + '%', description: `Current: +${this.playerStats.shieldCapacityBonus.toFixed(1)}% (Next: +5%, Max: 100%)`, category: 'defense' },
+                { name: 'Shield Regeneration', stat: 'shieldRegenBonus', requiredLevel: statRequiredLevels.shieldRegenBonus, cost: Math.floor((35 + (this.upgradeLevels.shieldRegenBonus || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.shieldRegenBonus || 0)), current: this.playerStats.shieldRegenBonus.toFixed(1) + '/s', description: `Current: +${this.playerStats.shieldRegenBonus.toFixed(1)}/s (Next: +1/s)`, category: 'defense' },
+                { name: 'Damage Reduction', stat: 'damageReduction', requiredLevel: statRequiredLevels.damageReduction, cost: Math.floor((40 + (this.upgradeLevels.damageReduction || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.damageReduction || 0)), current: this.playerStats.damageReduction.toFixed(1) + '%', description: `Current: ${this.playerStats.damageReduction.toFixed(1)}% (Next: +1%, Max: 50%)`, category: 'defense' },
+                { name: 'Evasion', stat: 'evasion', requiredLevel: statRequiredLevels.evasion, cost: Math.floor((40 + (this.upgradeLevels.evasion || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.evasion || 0)), current: this.playerStats.evasion.toFixed(1) + '%', description: `Current: ${this.playerStats.evasion.toFixed(1)}% (Next: +1%, Max: 30%)`, category: 'defense' },
+                { name: 'Material Drop Rate', stat: 'materialDropRate', requiredLevel: statRequiredLevels.materialDropRate, cost: Math.floor((25 + (this.upgradeLevels.materialDropRate || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.materialDropRate || 0)), current: this.playerStats.materialDropRate.toFixed(1) + '%', description: `Current: +${this.playerStats.materialDropRate.toFixed(1)}% (Next: +5%)`, category: 'economy' },
+                { name: 'Token Drop Rate', stat: 'tokenDropRate', requiredLevel: statRequiredLevels.tokenDropRate, cost: Math.floor((30 + (this.upgradeLevels.tokenDropRate || 0) * 5) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.tokenDropRate || 0)), current: this.playerStats.tokenDropRate.toFixed(1) + '%', description: `Current: +${this.playerStats.tokenDropRate.toFixed(1)}% (Next: +5%)`, category: 'economy' },
+                { name: 'Level Time Reduction', stat: 'levelTimeReduction', requiredLevel: statRequiredLevels.levelTimeReduction, cost: Math.floor((45 + (this.upgradeLevels.levelTimeReduction || 0) * 7) * baseCostMultiplier * tierMultiplier(this.upgradeLevels.levelTimeReduction || 0)), current: this.playerStats.levelTimeReduction.toFixed(1) + '%', description: `Current: -${this.playerStats.levelTimeReduction.toFixed(1)}% time per level (Next: -3%, Max: 40% = 18s per level)`, category: 'economy' },
+                { name: 'Max Health', stat: 'maxHealth', requiredLevel: statRequiredLevels.maxHealth, cost: Math.floor((25 + (this.upgradeLevels.maxHealth || 0) * 5) * baseCostMultiplier), current: this.playerStats.maxHealth, description: `Current: ${this.playerStats.maxHealth} HP (Next: +10)`, category: 'quality' },
+                { name: 'Health Regeneration', stat: 'healthRegen', requiredLevel: statRequiredLevels.healthRegen, cost: Math.floor((30 + (this.upgradeLevels.healthRegen || 0) * 5) * baseCostMultiplier), current: this.playerStats.healthRegen.toFixed(1) + ' HP/s', description: `Current: ${this.playerStats.healthRegen.toFixed(1)} HP/s (Next: +0.5 HP/s)`, category: 'quality' },
+                { name: 'Health Pack', stat: 'health', requiredLevel: statRequiredLevels.health, cost: Math.floor((20 + (healthPacksOwned * 5)) * baseCostMultiplier), current: healthPacksOwned, description: `Owned: ${healthPacksOwned} packs (Restores 50 HP each)`, category: 'consumable' }
             ];
             
             const categories = {
-                combat: { name: '⚔️ Combat Stats', upgrades: [] },
-                defense: { name: '🛡️ Defense Stats', upgrades: [] },
-                economy: { name: '💰 Economy/Progression', upgrades: [] },
-                quality: { name: '✨ Quality of Life', upgrades: [] },
-                consumable: { name: '💉 Consumables', upgrades: [] }
+                combat: { name: 'Combat Stats', upgrades: [] },
+                defense: { name: 'Defense Stats', upgrades: [] },
+                economy: { name: 'Economy/Progression', upgrades: [] },
+                quality: { name: 'Quality of Life', upgrades: [] },
+                consumable: { name: 'Consumables', upgrades: [] }
             };
             
             upgrades.forEach(upgrade => {
@@ -11627,10 +14197,57 @@ class SpaceShooterGame {
                 { id: 'neuronet-individual', name: 'Neural Net Background (Mode 2)', price: this.cosmetics?.skins?.['neuronet-individual']?.price || 5, desc: 'Animated neuronet skin (Mode 2)', unlocked: this.cosmetics?.skins?.['neuronet-individual']?.unlocked },
                 { id: 'classic-individual', name: 'Classic Individual Background (Mode 2)', price: this.cosmetics?.skins?.['classic-individual']?.price || 5, desc: 'Original starfield', unlocked: this.cosmetics?.skins?.['classic-individual']?.unlocked },
                 { id: 'classic-ensemble', name: 'Classic Ensemble Background', price: 0, desc: 'Default ensemble field (Mode 1)', unlocked: true },
-                { id: 'retro-future-mode1', name: 'Retro-Future Grid (Mode 1)', price: this.cosmetics?.skins?.['retro-future-mode1']?.price || 7, desc: 'Retro neon grid with futuristic glow (Mode 1)', unlocked: this.cosmetics?.skins?.['retro-future-mode1']?.unlocked }
+                { id: 'retro-future-mode1', name: 'Retro-Future Grid (Mode 1)', price: this.cosmetics?.skins?.['retro-future-mode1']?.price || 7, desc: 'Retro neon grid with futuristic glow (Mode 1)', unlocked: this.cosmetics?.skins?.['retro-future-mode1']?.unlocked },
+                { id: 'basic', name: 'Atomic Fighter (Default)', price: 0, desc: 'Original atomic ship - classic blue fighter jet design', unlocked: true, type: 'ship' }
             ];
             skins.forEach(skin => {
                 const unlocked = skin.unlocked || false;
+                // Handle ship hulls differently from background skins
+                if (skin.type === 'ship') {
+                    const isActive = this.currentShip === skin.id;
+                    const canAfford = (this.cosmetics?.currency?.neurokeys || 0) >= skin.price;
+                    const actionLabel = unlocked ? (isActive ? 'Equipped' : 'Equip') : `Unlock (${skin.price} NK)`;
+                    const disabled = unlocked ? isActive : !canAfford;
+                    const button = document.createElement('button');
+                    button.className = 'shop-btn';
+                    if (disabled) button.disabled = true;
+                    button.textContent = actionLabel;
+                    button.onclick = (event) => {
+                        event.stopPropagation();
+                        if (!unlocked) {
+                            const ok = this.unlockSkin(skin.id);
+                            if (!ok) return;
+                        }
+                        // Equip the ship hull
+                        if (this.equipmentStats.ships[skin.id]) {
+                            this.currentShip = skin.id;
+                            this.player.size = this.equipmentStats.ships[skin.id].size || 25;
+                            if (this.ownedItems.ships[skin.id]) {
+                                this.ownedItems.ships[skin.id].count = Math.max(1, this.ownedItems.ships[skin.id].count || 1);
+                            } else {
+                                this.ownedItems.ships[skin.id] = { count: 1, durability: 100 };
+                            }
+                        }
+                        this.updateShopUI();
+                    };
+                    const item = document.createElement('div');
+                    item.className = 'shop-item';
+                    item.innerHTML = `
+                        <div>
+                            <strong style="color: #4fc3f7;">${skin.name}</strong>
+                            <div style="font-size: 0.85em; color: #4fc3f7; margin-top: 3px;">
+                                ${skin.desc}
+                            </div>
+                            <div style="font-size: 0.9em; color: #aaa; margin-top: 5px;">
+                                ${unlocked ? 'Unlocked' : `Cost: ${skin.price} Neurokeys`}
+                            </div>
+                        </div>
+                    `;
+                    item.appendChild(button);
+                    skinList.appendChild(item);
+                    return;
+                }
+                // Handle background skins
                 const targetCategory = skin.id === 'retro-future-mode1' || skin.id === 'classic-ensemble'
                     ? 'ensembleBackground'
                     : 'individualBackground';
@@ -11750,7 +14367,7 @@ class SpaceShooterGame {
                     loadSaveBtn.disabled = false;
                     loadSaveBtn.style.opacity = '1';
                     loadSaveBtn.style.cursor = 'pointer';
-                    loadSaveBtn.textContent = '💾 Load Last Save (V) - 2 Levels Back';
+                    loadSaveBtn.textContent = 'ðŸ’¾ Load Last Save (V) - 2 Levels Back';
                 }
                 if (saveHint) {
                     saveHint.style.display = 'block';
@@ -11778,6 +14395,12 @@ class SpaceShooterGame {
     }
 
     draw() {
+        // Apply screen shake effect (translate entire canvas)
+        if (this.player && this.player.screenShake && this.player.screenShake.intensity > 0) {
+            this.ctx.save();
+            this.ctx.translate(this.player.screenShake.x, this.player.screenShake.y);
+        }
+        
         // Preload overlay: hold draw loop until ready
         if (!this.preloadComplete) {
             this.drawPreloadOverlay();
@@ -11885,6 +14508,17 @@ class SpaceShooterGame {
                 this.drawEnsembleModeBackground();
             }
             this.drawPlayer();
+        }
+        
+        // Restore context from screen shake
+        if (this.player && this.player.screenShake && this.player.screenShake.intensity > 0) {
+            this.ctx.restore();
+        }
+        
+        // Draw hit flash overlay effect
+        if (this.player && this.player.hitFlash > 0) {
+            this.ctx.fillStyle = `rgba(255, 100, 100, ${this.player.hitFlash * 0.3})`;
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         }
     }
     
@@ -12049,14 +14683,14 @@ class SpaceShooterGame {
         
         if (this.currentBoss.bossType === 'neurotransmitter') {
             // Level 15: Neurotransmitter boss
-            bossName = '🧠 NEUROTRANSMITTER BOSS';
+            bossName = 'ðŸ§  NEUROTRANSMITTER BOSS';
             const vesiclesRemaining = this.bossPuzzleState.totalVesicles - this.bossPuzzleState.vesiclesDestroyed;
             hintText = vesiclesRemaining > 0 
                 ? `Destroy ${vesiclesRemaining} vesicle${vesiclesRemaining > 1 ? 's' : ''} first!`
                 : 'Neuron core is now vulnerable!';
         } else if (this.currentBoss.bossType === 'dnaHelix') {
             // Level 30: DNA Helix boss - order-based: strand1 first, then strand2, then core
-            bossName = '🧬 DNA HELIX BOSS';
+            bossName = 'DNA HELIX BOSS';
             if (!this.bossPuzzleState.strand1Destroyed && !this.bossPuzzleState.strand2Destroyed) {
                 hintText = 'Destroy strand 1 (green) first!';
             } else if (this.bossPuzzleState.strand1Destroyed && !this.bossPuzzleState.strand2Destroyed) {
@@ -12068,7 +14702,7 @@ class SpaceShooterGame {
             }
         } else if (this.currentBoss.bossType === 'proteinComplex') {
             // Level 45: Protein Complex boss
-            bossName = '🔬 PROTEIN COMPLEX BOSS';
+            bossName = 'ðŸ”¬ PROTEIN COMPLEX BOSS';
             const nextOrder = this.bossPuzzleState.nextSubunitOrder;
             const remaining = this.bossPuzzleState.totalSubunits - this.bossPuzzleState.subunitsDestroyed;
             if (remaining > 0) {
@@ -12078,7 +14712,7 @@ class SpaceShooterGame {
             }
         } else if (this.currentBoss.bossType === 'cellMembrane') {
             // Level 60: Cell Membrane boss
-            bossName = '🦠 CELL MEMBRANE BOSS';
+            bossName = 'ðŸ¦  CELL MEMBRANE BOSS';
             if (!this.bossPuzzleState.outerMembraneDestroyed) {
                 hintText = 'Destroy outer membrane first!';
             } else if (!this.bossPuzzleState.innerMembraneDestroyed) {
@@ -12088,7 +14722,7 @@ class SpaceShooterGame {
             }
         } else if (this.currentBoss.bossType === 'advanced') {
             // Level 75+: Advanced bosses
-            bossName = '⚛️ ADVANCED BOSS';
+            bossName = ' ADVANCED BOSS';
             hintText = 'Destroy the core!';
         }
         
@@ -14351,6 +16985,85 @@ class SpaceShooterGame {
         const shipColor = ship.color || '#4fc3f7';
         const shipSize = this.player.size;
         
+        // Draw enhanced energy ripples with multiple layers
+        if (this.player.energyRipples && this.player.energyRipples.length > 0) {
+            this.player.energyRipples.forEach(ripple => {
+                const lifePercent = ripple.life / ripple.maxLife;
+                const alpha = lifePercent * 0.5;
+                
+                // Outer ripple ring
+                this.ctx.strokeStyle = ripple.color;
+                this.ctx.globalAlpha = alpha;
+                this.ctx.lineWidth = 3;
+                this.ctx.shadowBlur = 10;
+                this.ctx.shadowColor = ripple.color;
+                this.ctx.beginPath();
+                this.ctx.arc(ripple.x, ripple.y, Math.max(0, ripple.radius || 0), 0, Math.PI * 2);
+                this.ctx.stroke();
+                
+                // Inner bright ring
+                if (lifePercent > 0.3) {
+                    this.ctx.strokeStyle = '#ffffff';
+                    this.ctx.globalAlpha = alpha * 0.6;
+                    this.ctx.lineWidth = 1.5;
+                    this.ctx.beginPath();
+                    this.ctx.arc(ripple.x, ripple.y, Math.max(0, ripple.radius || 0) * 0.7, 0, Math.PI * 2);
+                    this.ctx.stroke();
+                }
+                
+                // Center flash
+                if (lifePercent > 0.7) {
+                    const flashGradient = this.ctx.createRadialGradient(
+                        ripple.x, ripple.y, 0,
+                        ripple.x, ripple.y, ripple.radius * 0.3
+                    );
+                    flashGradient.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.8})`);
+                    flashGradient.addColorStop(1, `rgba(255, 255, 255, 0)`);
+                    this.ctx.fillStyle = flashGradient;
+                    this.ctx.beginPath();
+                    this.ctx.arc(ripple.x, ripple.y, Math.max(0, ripple.radius || 0) * 0.3, 0, Math.PI * 2);
+                    this.ctx.fill();
+                }
+                
+                this.ctx.shadowBlur = 0;
+                this.ctx.globalAlpha = 1.0;
+            });
+        }
+        
+        // Draw enhanced glow effect around ship with pulsing animation
+        if (this.player.glowIntensity > 0) {
+            const time = this.time || 0;
+            const pulse = 1 + Math.sin(time * 8) * 0.2; // Pulsing effect
+            const glowRadius = shipSize * (1.4 + this.player.glowIntensity * 0.6 * pulse);
+            
+            // Outer glow layer
+            const glowGradient = this.ctx.createRadialGradient(
+                this.player.x, this.player.y, shipSize * 0.3,
+                this.player.x, this.player.y, glowRadius
+            );
+            glowGradient.addColorStop(0, `rgba(79, 195, 247, ${this.player.glowIntensity * 0.7})`);
+            glowGradient.addColorStop(0.4, `rgba(255, 170, 0, ${this.player.glowIntensity * 0.4})`);
+            glowGradient.addColorStop(0.7, `rgba(255, 100, 100, ${this.player.glowIntensity * 0.2})`);
+            glowGradient.addColorStop(1, `rgba(79, 195, 247, 0)`);
+            this.ctx.fillStyle = glowGradient;
+            this.ctx.beginPath();
+            this.ctx.arc(this.player.x, this.player.y, glowRadius, 0, Math.PI * 2);
+            this.ctx.fill();
+            
+            // Inner bright core
+            const coreGradient = this.ctx.createRadialGradient(
+                this.player.x, this.player.y, 0,
+                this.player.x, this.player.y, shipSize * 0.8
+            );
+            coreGradient.addColorStop(0, `rgba(255, 255, 255, ${this.player.glowIntensity * 0.5})`);
+            coreGradient.addColorStop(0.5, `rgba(79, 195, 247, ${this.player.glowIntensity * 0.3})`);
+            coreGradient.addColorStop(1, `rgba(79, 195, 247, 0)`);
+            this.ctx.fillStyle = coreGradient;
+            this.ctx.beginPath();
+            this.ctx.arc(this.player.x, this.player.y, shipSize * 0.8, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        
         // Draw shield (before rotation, so it stays circular)
         // Use actual collision radius for shield to match ship visual extent
         const shield = this.equipmentStats.shields[this.currentShield];
@@ -14358,10 +17071,35 @@ class SpaceShooterGame {
             this.drawShield(this.player.x, this.player.y, shield, this.playerStats.shield, this.playerStats.maxShield);
         }
         
-        // Save context, translate to player position, rotate, then draw ship
+        // Save context, translate to player position, apply 3D wobble rotations, then draw ship
         this.ctx.save();
         this.ctx.translate(this.player.x, this.player.y);
-        this.ctx.rotate(this.player.angle);
+        
+        // Apply shrink effect first (before rotations)
+        const shrinkScale = this.player.shrink !== undefined ? this.player.shrink : 1.0;
+        // Apply stretch effects (X and Y can stretch independently for wobble effect)
+        const stretchX = this.player.stretchX !== undefined ? this.player.stretchX : 1.0;
+        const stretchY = this.player.stretchY !== undefined ? this.player.stretchY : 1.0;
+        this.ctx.scale(shrinkScale * stretchX, shrinkScale * stretchY);
+        
+        // Apply 3D wobble rotations (yaw, pitch, roll) - dramatically increased
+        // Yaw is the main rotation (already in player.angle)
+        this.ctx.rotate(this.player.angle + this.player.yaw);
+        
+        // Apply pitch (forward/backward tilt) - simulate by scaling Y and offsetting (tripled effect)
+        if (Math.abs(this.player.pitch) > 0.01) {
+            const pitchScale = 1 - Math.abs(this.player.pitch) * 0.9; // Tripled from 0.3 to 0.9 for dramatic effect
+            this.ctx.scale(1, pitchScale);
+            // Add dramatic vertical offset for perspective effect (tripled)
+            this.ctx.translate(0, this.player.pitch * shipSize * 0.6);
+        }
+        
+        // Apply roll (side tilt) - simulate by rotating around the forward axis (tripled effect)
+        if (Math.abs(this.player.roll) > 0.01) {
+            // For 2D canvas, we simulate roll by skewing horizontally (tripled)
+            const skewX = this.player.roll * 1.5; // Tripled from 0.5 to 1.5 for dramatic effect
+            this.ctx.transform(1, 0, skewX, 1, 0, 0);
+        }
         
         // Draw ship based on type (now relative to origin after translate/rotate)
         this.ctx.fillStyle = shipColor;
@@ -15068,6 +17806,177 @@ class SpaceShooterGame {
             }
             
             // Reset fill style for other ships
+            this.ctx.fillStyle = shipColor;
+        } else if (ship.shape === 'timeDecay') {
+            // TIME DECAY ATOMIC VESSEL - High-fidelity animated hull with advanced graphics
+            // Completely different design from atomic ship - sleek futuristic design with pink/magenta theme
+            const time = (this.time || Date.now() * 0.001) * 2;
+            
+            // Main hull gradient - pink/magenta to deep purple
+            const hullGradient = this.ctx.createLinearGradient(0, -shipSize * 1.2, 0, shipSize * 0.9);
+            hullGradient.addColorStop(0, '#ff6b9d'); // Bright pink at nose
+            hullGradient.addColorStop(0.2, '#ff8fb3'); // Light pink
+            hullGradient.addColorStop(0.4, '#e91e63'); // Magenta
+            hullGradient.addColorStop(0.6, '#c2185b'); // Deep pink
+            hullGradient.addColorStop(0.8, '#9c27b0'); // Purple
+            hullGradient.addColorStop(1, '#7b1fa2'); // Deep purple at tail
+            this.ctx.fillStyle = hullGradient;
+            
+            // Main hull body - sleek futuristic design
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, -shipSize * 1.2); // Sharp nose
+            
+            // Left side - sleek curves
+            this.ctx.lineTo(-shipSize * 0.18, -shipSize * 0.85);
+            this.ctx.lineTo(-shipSize * 0.28, -shipSize * 0.5);
+            this.ctx.lineTo(-shipSize * 0.38, -shipSize * 0.15);
+            this.ctx.lineTo(-shipSize * 0.45, shipSize * 0.2);
+            this.ctx.lineTo(-shipSize * 0.4, shipSize * 0.6);
+            this.ctx.lineTo(-shipSize * 0.3, shipSize * 0.9);
+            
+            // Right side (mirror)
+            this.ctx.lineTo(shipSize * 0.3, shipSize * 0.9);
+            this.ctx.lineTo(shipSize * 0.4, shipSize * 0.6);
+            this.ctx.lineTo(shipSize * 0.45, shipSize * 0.2);
+            this.ctx.lineTo(shipSize * 0.38, -shipSize * 0.15);
+            this.ctx.lineTo(shipSize * 0.28, -shipSize * 0.5);
+            this.ctx.lineTo(shipSize * 0.18, -shipSize * 0.85);
+            this.ctx.closePath();
+            this.ctx.fill();
+            
+            // Animated energy wings - flowing energy design
+            const wingPulse = 0.8 + Math.sin(time * 2) * 0.2;
+            const wingGradient = this.ctx.createLinearGradient(0, shipSize * 0.1, 0, shipSize * 0.7);
+            wingGradient.addColorStop(0, `rgba(255, 107, 157, ${0.9 * wingPulse})`);
+            wingGradient.addColorStop(0.5, `rgba(233, 30, 99, ${0.7 * wingPulse})`);
+            wingGradient.addColorStop(1, `rgba(156, 39, 176, ${0.5 * wingPulse})`);
+            this.ctx.fillStyle = wingGradient;
+            
+            // Left energy wing
+            this.ctx.beginPath();
+            this.ctx.moveTo(-shipSize * 0.45, shipSize * 0.2);
+            this.ctx.quadraticCurveTo(-shipSize * 1.1, shipSize * 0.1 + Math.sin(time) * 5, -shipSize * 1.0, shipSize * 0.6);
+            this.ctx.lineTo(-shipSize * 0.4, shipSize * 0.6);
+            this.ctx.closePath();
+            this.ctx.fill();
+            
+            // Right energy wing
+            this.ctx.beginPath();
+            this.ctx.moveTo(shipSize * 0.45, shipSize * 0.2);
+            this.ctx.quadraticCurveTo(shipSize * 1.1, shipSize * 0.1 + Math.sin(time) * 5, shipSize * 1.0, shipSize * 0.6);
+            this.ctx.lineTo(shipSize * 0.4, shipSize * 0.6);
+            this.ctx.closePath();
+            this.ctx.fill();
+            
+            // Animated energy core at nose - pulsing effect
+            const corePulse = 0.7 + Math.sin(time * 3) * 0.3;
+            const coreGradient = this.ctx.createRadialGradient(0, -shipSize * 1.2, 0, 0, -shipSize * 1.2, shipSize * 0.15);
+            coreGradient.addColorStop(0, `rgba(255, 255, 255, ${corePulse})`);
+            coreGradient.addColorStop(0.3, `rgba(255, 107, 157, ${0.9 * corePulse})`);
+            coreGradient.addColorStop(0.6, `rgba(233, 30, 99, ${0.7 * corePulse})`);
+            coreGradient.addColorStop(1, `rgba(156, 39, 176, ${0.5 * corePulse})`);
+            this.ctx.fillStyle = coreGradient;
+            this.ctx.beginPath();
+            this.ctx.arc(0, -shipSize * 1.2, shipSize * 0.15, 0, Math.PI * 2);
+            this.ctx.fill();
+            
+            // Energy lines radiating from core - animated
+            this.ctx.strokeStyle = `rgba(255, 107, 157, ${0.6 * corePulse})`;
+            this.ctx.lineWidth = 2;
+            this.ctx.shadowBlur = 8;
+            this.ctx.shadowColor = 'rgba(255, 107, 157, 0.8)';
+            for (let i = 0; i < 8; i++) {
+                const angle = (Math.PI * 2 * i) / 8 + time;
+                const lineLength = shipSize * 0.3 * (1 + Math.sin(time * 2 + i) * 0.2);
+                this.ctx.beginPath();
+                this.ctx.moveTo(0, -shipSize * 1.2);
+                this.ctx.lineTo(Math.cos(angle) * lineLength, -shipSize * 1.2 + Math.sin(angle) * lineLength);
+                this.ctx.stroke();
+            }
+            this.ctx.shadowBlur = 0;
+            
+            // Animated energy particles orbiting the ship
+            for (let i = 0; i < 12; i++) {
+                const particleAngle = (Math.PI * 2 * i) / 12 + time * 1.5;
+                const particleDist = shipSize * 0.8;
+                const particleX = Math.cos(particleAngle) * particleDist;
+                const particleY = Math.sin(particleAngle) * particleDist;
+                const particleSize = 3 + Math.sin(time * 4 + i) * 2;
+                const particleAlpha = 0.6 + Math.sin(time * 3 + i) * 0.4;
+                this.ctx.fillStyle = `rgba(255, 107, 157, ${particleAlpha})`;
+                this.ctx.shadowBlur = particleSize * 2;
+                this.ctx.shadowColor = 'rgba(255, 107, 157, 0.8)';
+                this.ctx.beginPath();
+                this.ctx.arc(particleX, particleY, particleSize, 0, Math.PI * 2);
+                this.ctx.fill();
+            }
+            this.ctx.shadowBlur = 0;
+            
+            // Enhanced animated engine trail - longer and more dynamic
+            const trailPulse = 0.8 + Math.sin(time * 3) * 0.2;
+            const trailBaseLength = shipSize * 2.5; // Much longer trail (was 0.9)
+            const trailLength = trailBaseLength * (1 + Math.sin(time * 2.5) * 0.3) * trailPulse;
+            const trailWidth = shipSize * 0.5 * (1 + Math.sin(time * 2) * 0.4);
+            
+            // Multi-layer trail gradient for depth and richness
+            const trailGradient = this.ctx.createLinearGradient(0, shipSize * 0.9, 0, shipSize * 0.9 + trailLength);
+            trailGradient.addColorStop(0, `rgba(255, 107, 157, ${1.0 * corePulse * trailPulse})`);
+            trailGradient.addColorStop(0.15, `rgba(255, 140, 180, ${0.95 * corePulse * trailPulse})`);
+            trailGradient.addColorStop(0.3, `rgba(233, 30, 99, ${0.85 * corePulse * trailPulse})`);
+            trailGradient.addColorStop(0.5, `rgba(200, 50, 120, ${0.7 * corePulse * trailPulse})`);
+            trailGradient.addColorStop(0.7, `rgba(156, 39, 176, ${0.5 * corePulse * trailPulse})`);
+            trailGradient.addColorStop(0.85, `rgba(123, 31, 162, ${0.3 * corePulse * trailPulse})`);
+            trailGradient.addColorStop(1, `rgba(100, 20, 140, ${0.1 * corePulse * trailPulse})`);
+            
+            // Main trail body with animated width
+            this.ctx.fillStyle = trailGradient;
+            this.ctx.shadowBlur = 20;
+            this.ctx.shadowColor = 'rgba(255, 107, 157, 0.8)';
+            this.ctx.beginPath();
+            this.ctx.moveTo(-trailWidth, shipSize * 0.9);
+            this.ctx.quadraticCurveTo(0, shipSize * 0.9 + trailLength * 0.4, trailWidth, shipSize * 0.9);
+            this.ctx.quadraticCurveTo(0, shipSize * 0.9 + trailLength * 0.8, -trailWidth * 0.6, shipSize * 0.9 + trailLength);
+            this.ctx.lineTo(trailWidth * 0.6, shipSize * 0.9 + trailLength);
+            this.ctx.quadraticCurveTo(0, shipSize * 0.9 + trailLength * 0.8, -trailWidth, shipSize * 0.9);
+            this.ctx.closePath();
+            this.ctx.fill();
+            this.ctx.shadowBlur = 0;
+            
+            // Secondary trail layer for extra depth
+            const secondaryTrailGradient = this.ctx.createLinearGradient(0, shipSize * 0.9, 0, shipSize * 0.9 + trailLength * 0.7);
+            secondaryTrailGradient.addColorStop(0, `rgba(255, 200, 220, ${0.6 * corePulse * trailPulse})`);
+            secondaryTrailGradient.addColorStop(0.5, `rgba(233, 100, 150, ${0.4 * corePulse * trailPulse})`);
+            secondaryTrailGradient.addColorStop(1, `rgba(156, 80, 200, ${0.1 * corePulse * trailPulse})`);
+            this.ctx.fillStyle = secondaryTrailGradient;
+            this.ctx.beginPath();
+            const secondaryWidth = trailWidth * 0.7;
+            this.ctx.moveTo(-secondaryWidth, shipSize * 0.9);
+            this.ctx.quadraticCurveTo(0, shipSize * 0.9 + trailLength * 0.35, secondaryWidth, shipSize * 0.9);
+            this.ctx.quadraticCurveTo(0, shipSize * 0.9 + trailLength * 0.7, -secondaryWidth * 0.5, shipSize * 0.9 + trailLength * 0.7);
+            this.ctx.lineTo(secondaryWidth * 0.5, shipSize * 0.9 + trailLength * 0.7);
+            this.ctx.quadraticCurveTo(0, shipSize * 0.9 + trailLength * 0.35, -secondaryWidth, shipSize * 0.9);
+            this.ctx.closePath();
+            this.ctx.fill();
+            
+            // Animated trail particles for extra visual effect
+            for (let i = 0; i < 8; i++) {
+                const particlePos = (i + 1) / 9;
+                const particleY = shipSize * 0.9 + trailLength * particlePos;
+                const particleX = (Math.sin(time * 4 + i * 0.8) * trailWidth * 0.3);
+                const particleSize = 2 + Math.sin(time * 5 + i) * 1.5;
+                const particleAlpha = (1 - particlePos) * 0.7 * corePulse * trailPulse;
+                this.ctx.fillStyle = `rgba(255, 150, 200, ${particleAlpha})`;
+                this.ctx.shadowBlur = particleSize * 3;
+                this.ctx.shadowColor = 'rgba(255, 107, 157, 0.9)';
+                this.ctx.beginPath();
+                this.ctx.arc(particleX, particleY, particleSize, 0, Math.PI * 2);
+                this.ctx.fill();
+            }
+            this.ctx.shadowBlur = 0;
+            
+            // Glow effect around entire ship
+            this.ctx.shadowBlur = 15;
+            this.ctx.shadowColor = 'rgba(255, 107, 157, 0.6)';
             this.ctx.fillStyle = shipColor;
         } else if (this.currentShip === 'individualStabilizer') {
             // Enhanced Individual Stabilizer - high-tier scientific vessel
@@ -18766,6 +21675,62 @@ class SpaceShooterGame {
                 this.ctx.arc(this.player.x + Math.cos(angle) * dist, this.player.y + Math.sin(angle) * dist, 2.5, 0, Math.PI * 2);
                 this.ctx.fill();
             }
+        } else if (ship.bonus === 'timeDecay') {
+            // Time Decay effect - temporal decay energy field with time-based particles
+            const time = Date.now() * 0.009;
+            const decayIntensity = 0.5 + Math.sin(time * 1.5) * 0.3;
+            
+            // Time decay field - pulsing pink/magenta energy rings
+            this.ctx.strokeStyle = `rgba(255, 107, 157, ${decayIntensity})`;
+            this.ctx.lineWidth = 2.5;
+            this.ctx.setLineDash([5, 5]);
+            
+            // Draw temporal decay rings
+            for (let i = 1; i <= 3; i++) {
+                const radius = shipSize * (0.85 + i * 0.2);
+                const alpha = decayIntensity * (1 - i * 0.15);
+                this.ctx.strokeStyle = `rgba(255, 107, 157, ${alpha})`;
+                this.ctx.beginPath();
+                this.ctx.arc(this.player.x, this.player.y, radius, 0, Math.PI * 2);
+                this.ctx.stroke();
+            }
+            this.ctx.setLineDash([]);
+            
+            // Time decay particles - temporal energy orbs
+            for (let i = 0; i < 8; i++) {
+                const angle = (Math.PI * 2 * i) / 8 + time * 1.2;
+                const dist = shipSize * 1.2;
+                const particleX = this.player.x + Math.cos(angle) * dist;
+                const particleY = this.player.y + Math.sin(angle) * dist;
+                const particleSize = 3 + Math.sin(time * 2 + i) * 1.5;
+                const particleAlpha = 0.6 + Math.sin(time * 1.5 + i) * 0.4;
+                this.ctx.fillStyle = `rgba(255, 107, 157, ${particleAlpha * decayIntensity})`;
+                this.ctx.shadowBlur = particleSize * 2;
+                this.ctx.shadowColor = 'rgba(255, 107, 157, 0.8)';
+                this.ctx.beginPath();
+                this.ctx.arc(particleX, particleY, particleSize, 0, Math.PI * 2);
+                this.ctx.fill();
+            }
+            this.ctx.shadowBlur = 0;
+            
+            // Temporal decay trails - flowing energy lines
+            this.ctx.strokeStyle = `rgba(233, 30, 99, ${0.4 * decayIntensity})`;
+            this.ctx.lineWidth = 1.5;
+            for (let i = 0; i < 6; i++) {
+                const angle = (Math.PI * 2 * i) / 6 + time;
+                const startDist = shipSize * 0.9;
+                const endDist = shipSize * 1.3;
+                this.ctx.beginPath();
+                this.ctx.moveTo(
+                    this.player.x + Math.cos(angle) * startDist,
+                    this.player.y + Math.sin(angle) * startDist
+                );
+                this.ctx.lineTo(
+                    this.player.x + Math.cos(angle) * endDist,
+                    this.player.y + Math.sin(angle) * endDist
+                );
+                this.ctx.stroke();
+            }
         } else if (ship.bonus === 'complete') {
             // Complete Description effect - ultimate energy field
             const time = Date.now() * 0.007;
@@ -19146,7 +22111,7 @@ class SpaceShooterGame {
             this.ctx.font = 'bold 12px Arial';
             this.ctx.shadowBlur = playerUnderUI ? 0 : 4;
             this.ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
-            const boostStatus = this.boostActive ? '⚡ BOOST!' : (this.methane >= this.maxMethane ? '🚀 Ready' : '💨');
+            const boostStatus = this.boostActive ? '⚡ BOOST!' : (this.methane >= this.maxMethane ? '🚀 Ready' : '⛽');
             this.ctx.fillText(`${boostStatus} Methane: ${Math.ceil(this.methane)}/${this.maxMethane}`, x + 5, y + 15);
             this.ctx.shadowBlur = 0;
         }
@@ -19206,7 +22171,7 @@ class SpaceShooterGame {
         this.ctx.textAlign = 'left';
         this.ctx.shadowBlur = playerUnderFoodUI ? 0 : 8;
         this.ctx.shadowColor = 'rgba(255, 152, 0, 0.8)';
-        this.ctx.fillText('🍽️ Food Materials', x, y);
+        this.ctx.fillText('Food Materials', x, y);
         this.ctx.shadowBlur = 0;
         
         y += 20;
@@ -19646,10 +22611,193 @@ class SpaceShooterGame {
         }
     }
     
+    // OPTIMIZATION: Health Bucket System - Get health bucket for caching
+    getHealthBucket(healthPercent) {
+        // Quantize health to nearest bucket (1.0, 0.75, 0.5, 0.25, 0.1)
+        for (let i = 0; i < this.moleculeHealthBuckets.length; i++) {
+            if (healthPercent >= this.moleculeHealthBuckets[i]) {
+                return this.moleculeHealthBuckets[i];
+            }
+        }
+        return this.moleculeHealthBuckets[this.moleculeHealthBuckets.length - 1]; // Return lowest bucket
+    }
+
+    // OPTIMIZATION: Gradient Caching - Get cached atom color (simplified for performance)
+    // Since radial gradients are position-dependent, we cache the color stops and recreate
+    // But for better performance, we can use solid colors with health-based opacity when simplifying
+    getCachedAtomColor(atom, healthBucket, useGradient = true) {
+        if (!useGradient) {
+            // Return solid color with health-based opacity for simplified rendering
+            return { type: 'solid', color: atom.color, opacity: Math.max(0.6, healthBucket) };
+        }
+        
+        // For full rendering, return gradient parameters (we'll create gradient per atom)
+        // This is still faster than creating gradients from scratch every time
+        return { 
+            type: 'gradient', 
+            color: atom.color,
+            lightColor: this.lightenColor(atom.color, 0.3),
+            darkColor: this.darkenColor(atom.color, 0.2),
+            opacity: Math.max(0.7, healthBucket)
+        };
+    }
+    
+    // Create atom gradient from cached parameters (faster than full recreation)
+    createAtomGradientFromCache(atom, currentRadius, cachedParams) {
+        const gradient = this.ctx.createRadialGradient(atom.x, atom.y, 0, atom.x, atom.y, currentRadius);
+        gradient.addColorStop(0, cachedParams.color);
+        gradient.addColorStop(0.5, cachedParams.lightColor);
+        gradient.addColorStop(1, cachedParams.darkColor);
+        return gradient;
+    }
+
+    // OPTIMIZATION: Gradient Caching - Get or create cached bond gradient
+    // Bond gradients are position-independent, so we can fully cache them
+    getCachedBondGradient(healthBucket, shouldSimplify = false) {
+        if (shouldSimplify) {
+            // For simplified rendering, return solid color instead of gradient
+            const alpha = Math.max(0.4, healthBucket);
+            return { type: 'solid', color: `rgba(255, 170, 170, ${alpha})` };
+        }
+        
+        const cacheKey = `bond_${healthBucket}`;
+        
+        if (!this.moleculeGradientCache[cacheKey]) {
+            // Create and cache bond gradient (position-independent, can be reused)
+            const gradient = this.ctx.createLinearGradient(0, 0, 100, 100);
+            const alpha = Math.max(0.4, healthBucket); // Fade with health
+            gradient.addColorStop(0, `rgba(255, 150, 150, ${alpha})`);
+            gradient.addColorStop(0.5, `rgba(255, 200, 200, ${alpha * 0.9})`);
+            gradient.addColorStop(1, `rgba(255, 100, 100, ${alpha * 0.8})`);
+            this.moleculeGradientCache[cacheKey] = gradient;
+        }
+        
+        return { type: 'gradient', gradient: this.moleculeGradientCache[cacheKey] };
+    }
+
+    // Helper: Lighten a color
+    lightenColor(color, amount) {
+        // Simple lightening for hex colors
+        if (color.startsWith('#')) {
+            const num = parseInt(color.replace('#', ''), 16);
+            const r = Math.min(255, ((num >> 16) & 0xFF) + (255 * amount));
+            const g = Math.min(255, ((num >> 8) & 0xFF) + (255 * amount));
+            const b = Math.min(255, (num & 0xFF) + (255 * amount));
+            return `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
+        }
+        return color;
+    }
+
+    // Helper: Darken a color
+    darkenColor(color, amount) {
+        // Simple darkening for hex colors
+        if (color.startsWith('#')) {
+            const num = parseInt(color.replace('#', ''), 16);
+            const r = Math.max(0, ((num >> 16) & 0xFF) * (1 - amount));
+            const g = Math.max(0, ((num >> 8) & 0xFF) * (1 - amount));
+            const b = Math.max(0, (num & 0xFF) * (1 - amount));
+            return `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
+        }
+        return color;
+    }
+
+    // OPTIMIZATION: Particle Gradient Caching - Get size bucket for particle caching
+    getParticleSizeBucket(size) {
+        // Find nearest size bucket
+        for (let i = 0; i < this.particleSizeBuckets.length; i++) {
+            if (size <= this.particleSizeBuckets[i]) {
+                return this.particleSizeBuckets[i];
+            }
+        }
+        return this.particleSizeBuckets[this.particleSizeBuckets.length - 1]; // Return largest bucket
+    }
+
+    // OPTIMIZATION: Particle Gradient Caching - Get or create cached fire/explosion gradient
+    getCachedFireGradient(particle, sizeBucket) {
+        const cacheKey = `fire_${sizeBucket}`;
+        
+        if (!this.particleGradientCache[cacheKey]) {
+            // Cache gradient parameters (position will be set when used)
+            this.particleGradientCache[cacheKey] = {
+                type: 'fire',
+                sizeBucket: sizeBucket,
+                colorStops: [
+                    { pos: 0, color: '#ffeb3b' },    // Bright yellow center
+                    { pos: 0.3, color: '#ff9800' },  // Orange
+                    { pos: 0.7, color: '#f44336' },  // Red
+                    { pos: 1, color: '#c62828' }      // Dark red edge
+                ]
+            };
+        }
+        
+        return this.particleGradientCache[cacheKey];
+    }
+
+    // OPTIMIZATION: Particle Gradient Caching - Get or create cached blue particle gradient
+    getCachedBlueParticleGradient(particle, sizeBucket) {
+        const cacheKey = `blue_${sizeBucket}`;
+        
+        if (!this.particleGradientCache[cacheKey]) {
+            this.particleGradientCache[cacheKey] = {
+                type: 'blue',
+                sizeBucket: sizeBucket,
+                colorStops: [
+                    { pos: 0, color: '#ffffff' },
+                    { pos: 0.3, color: '#88ccff' },
+                    { pos: 0.7, color: '#4fc3f7' },
+                    { pos: 1, color: '#00bcd4' }
+                ]
+            };
+        }
+        
+        return this.particleGradientCache[cacheKey];
+    }
+
+    // OPTIMIZATION: Particle Gradient Caching - Get or create cached orange particle gradient
+    getCachedOrangeParticleGradient(particle, sizeBucket) {
+        const cacheKey = `orange_${sizeBucket}`;
+        
+        if (!this.particleGradientCache[cacheKey]) {
+            this.particleGradientCache[cacheKey] = {
+                type: 'orange',
+                sizeBucket: sizeBucket,
+                colorStops: [
+                    { pos: 0, color: '#ffffff' },
+                    { pos: 0.3, color: '#ffeb3b' },
+                    { pos: 0.7, color: '#ff9800' },
+                    { pos: 1, color: '#ff6b00' }
+                ]
+            };
+        }
+        
+        return this.particleGradientCache[cacheKey];
+    }
+
+    // OPTIMIZATION: Create gradient from cached parameters (faster than full recreation)
+    createParticleGradientFromCache(particle, cachedParams) {
+        const size = cachedParams.sizeBucket;
+        const gradient = this.ctx.createRadialGradient(particle.x, particle.y, 0, particle.x, particle.y, size);
+        
+        for (let i = 0; i < cachedParams.colorStops.length; i++) {
+            const stop = cachedParams.colorStops[i];
+            gradient.addColorStop(stop.pos, stop.color);
+        }
+        
+        return gradient;
+    }
+
     drawMolecule(obstacle) {
         if (!obstacle.atoms || obstacle.atoms.length === 0) return;
         
         const healthPercent = Math.max(0, obstacle.health / obstacle.maxHealth);
+        // OPTIMIZATION: Use health bucket for caching
+        const healthBucket = this.getHealthBucket(healthPercent);
+        
+        // Track current bucket on obstacle to detect bucket changes
+        if (obstacle._lastHealthBucket !== healthBucket) {
+            obstacle._lastHealthBucket = healthBucket;
+            // Bucket changed - could trigger cache updates if needed
+        }
         const simplifyShrink = !obstacle.isBoss && healthPercent < 0.9; // use lighter simplification, no frame skipping
         
         // OPTIMIZATION: Calculate speed for fast-moving molecule optimization
@@ -19681,9 +22829,11 @@ class SpaceShooterGame {
         // OPTIMIZATION: Use simpler rendering for damaged molecules
         if (isLowHealth) {
             // Very damaged: minimal rendering - just atoms, no bonds or effects
+            // OPTIMIZATION: Use health bucket for radius calculation (faster than healthPercent)
+            const radiusMultiplier = healthBucket; // Use bucket value instead of precise healthPercent
             for (let i = 0; i < obstacle.atoms.length; i++) {
                 const atom = obstacle.atoms[i];
-                const currentRadius = atom.radius * healthPercent;
+                const currentRadius = atom.radius * radiusMultiplier;
                 if (currentRadius > 0) {
                     this.ctx.fillStyle = atom.color;
                     this.ctx.beginPath();
@@ -19709,12 +22859,13 @@ class SpaceShooterGame {
             this.ctx.lineWidth = 2;
             this.ctx.shadowBlur = 0;
         } else {
-            // Default: enhanced bonds with gradient and glow (restored from backup)
-            const bondGradient = this.ctx.createLinearGradient(0, 0, 100, 100);
-            bondGradient.addColorStop(0, 'rgba(255, 150, 150, 0.8)');
-            bondGradient.addColorStop(0.5, 'rgba(255, 200, 200, 0.7)');
-            bondGradient.addColorStop(1, 'rgba(255, 100, 100, 0.6)');
-            this.ctx.strokeStyle = bondGradient;
+            // OPTIMIZATION: Use cached bond gradient
+            const bondGradientCache = this.getCachedBondGradient(healthBucket, false);
+            if (bondGradientCache.type === 'gradient') {
+                this.ctx.strokeStyle = bondGradientCache.gradient;
+            } else {
+                this.ctx.strokeStyle = bondGradientCache.color;
+            }
             this.ctx.lineWidth = 2.5;
             this.ctx.shadowBlur = 8;
             this.ctx.shadowColor = 'rgba(255, 150, 150, 0.6)';
@@ -19778,9 +22929,11 @@ class SpaceShooterGame {
         
         // OPTIMIZATION: Use for loop instead of forEach for better performance
         // OPTIMIZATION: Reduce visual effects for damaged molecules
-        for (let index = 0; index < obstacle.atoms.length; index++) {
-            const atom = obstacle.atoms[index];
-            const currentRadius = atom.radius * healthPercent;
+                    // OPTIMIZATION: Use health bucket for radius calculations
+                    const radiusMultiplier = healthBucket; // Use bucket value for consistency
+                    for (let index = 0; index < obstacle.atoms.length; index++) {
+                        const atom = obstacle.atoms[index];
+                        const currentRadius = atom.radius * radiusMultiplier;
             
             if (currentRadius > 0) {
                 if (shouldAggressivelySimplify) {
@@ -19790,15 +22943,21 @@ class SpaceShooterGame {
                     this.ctx.arc(atom.x, atom.y, currentRadius, 0, Math.PI * 2);
                     this.ctx.fill();
                 } else {
-                    // Default: full enhanced rendering with gradients and effects (restored from backup)
-                    // Atom gradient - red with depth
-                    const atomGradient = this.ctx.createRadialGradient(atom.x, atom.y, 0, atom.x, atom.y, currentRadius);
-                    atomGradient.addColorStop(0, '#ff9999'); // Bright red center
-                    atomGradient.addColorStop(0.4, atom.color); // Base color
-                    atomGradient.addColorStop(0.8, '#cc4444'); // Darker red
-                    atomGradient.addColorStop(1, '#992222'); // Very dark red edge
+                    // OPTIMIZATION: Use cached atom gradient parameters
+                    const atomCache = this.getCachedAtomColor(atom, healthBucket, true);
+                    if (atomCache.type === 'gradient') {
+                        // Create gradient from cached parameters (faster than full recreation)
+                        const atomGradient = this.ctx.createRadialGradient(atom.x, atom.y, 0, atom.x, atom.y, currentRadius);
+                        atomGradient.addColorStop(0, '#ff9999'); // Bright red center
+                        atomGradient.addColorStop(0.4, atom.color); // Base color
+                        atomGradient.addColorStop(0.8, '#cc4444'); // Darker red
+                        atomGradient.addColorStop(1, '#992222'); // Very dark red edge
+                        this.ctx.fillStyle = atomGradient;
+                    } else {
+                        // Fallback to solid color if needed
+                        this.ctx.fillStyle = atomCache.color;
+                    }
                     
-                    this.ctx.fillStyle = atomGradient;
                     this.ctx.beginPath();
                     this.ctx.arc(atom.x, atom.y, currentRadius, 0, Math.PI * 2);
                     this.ctx.fill();
@@ -22933,61 +26092,93 @@ class SpaceShooterGame {
                 const bulletSize = bullet.size || 5;
                 const angle = Math.atan2(bullet.vy, bullet.vx);
                 
-                // Always render glow (preserve visual quality)
-                if (useGlow && useGradients) {
-                    // Outer energy field glow
-                    const outerGlow = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 3);
-                    outerGlow.addColorStop(0, 'rgba(76, 175, 80, 0.4)');
-                    outerGlow.addColorStop(0.5, 'rgba(76, 175, 80, 0.2)');
-                    outerGlow.addColorStop(1, 'rgba(76, 175, 80, 0)');
-                    this.ctx.fillStyle = outerGlow;
+                // OPTIMIZATION: Use pre-shaded sprite if available and quality allows (eliminates gradient creation)
+                const useSprite = useGradients && renderingQuality !== 'low' && this.preShadedSprites?.basic;
+                let sprite = null;
+                if (useSprite) {
+                    sprite = this.getPreShadedSprite('basic', bulletSize);
+                }
+                
+                if (sprite && sprite.canvas) {
+                    // Use pre-rendered sprite (much faster - no gradient creation)
+                    const spriteSize = sprite.size;
+                    const drawSize = bulletSize * 2.2; // Scale to match original size
+                    this.ctx.save();
+                    this.ctx.globalAlpha = 1.0;
+                    this.ctx.drawImage(sprite.canvas, 
+                        bullet.x - spriteSize / 2, 
+                        bullet.y - spriteSize / 2, 
+                        spriteSize, spriteSize);
+                    this.ctx.restore();
+                    
+                    // OPTIMIZATION: Only render pulsing ring if quality allows
+                    if (useGlow && renderingQuality !== 'low') {
+                        // Pulsing outer ring
+                        const pulsePhase = Math.sin(time * 4) * 0.3 + 0.7;
+                        this.ctx.strokeStyle = `rgba(129, 199, 132, ${0.6 * pulsePhase})`;
+                        this.ctx.lineWidth = 2;
+                        this.ctx.beginPath();
+                        this.ctx.arc(bullet.x, bullet.y, bulletSize + 3, 0, Math.PI * 2);
+                        this.ctx.stroke();
+                    }
+                } else {
+                    // Fallback to gradient rendering (original code)
+                    // Always render glow (preserve visual quality)
+                    if (useGlow && useGradients) {
+                        // Outer energy field glow
+                        const outerGlow = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 3);
+                        outerGlow.addColorStop(0, 'rgba(76, 175, 80, 0.4)');
+                        outerGlow.addColorStop(0.5, 'rgba(76, 175, 80, 0.2)');
+                        outerGlow.addColorStop(1, 'rgba(76, 175, 80, 0)');
+                        this.ctx.fillStyle = outerGlow;
+                        this.ctx.beginPath();
+                        this.ctx.arc(bullet.x, bullet.y, bulletSize * 3, 0, Math.PI * 2);
+                        this.ctx.fill();
+                    }
+                    
+                    // OPTIMIZATION: Only render pulsing ring if quality allows
+                    if (useGlow && renderingQuality !== 'low') {
+                        // Pulsing outer ring
+                        const pulsePhase = Math.sin(time * 4) * 0.3 + 0.7;
+                        this.ctx.strokeStyle = `rgba(129, 199, 132, ${0.6 * pulsePhase})`;
+                        this.ctx.lineWidth = 2;
+                        this.ctx.beginPath();
+                        this.ctx.arc(bullet.x, bullet.y, bulletSize + 3, 0, Math.PI * 2);
+                        this.ctx.stroke();
+                    }
+                    
+                    // Main bullet body - always use gradient (preserve visual quality)
+                    const bulletGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize);
+                    bulletGradient.addColorStop(0, '#a5d6a7'); // Bright green center
+                    bulletGradient.addColorStop(0.4, '#66bb6a'); // Medium green
+                    bulletGradient.addColorStop(0.8, '#4caf50'); // Standard green
+                    bulletGradient.addColorStop(1, '#388e3c'); // Dark green edge
+                    this.ctx.fillStyle = bulletGradient;
+                    
+                    // Only use shadows if quality allows
+                    if (useShadows) {
+                        this.ctx.shadowBlur = 8;
+                        this.ctx.shadowColor = 'rgba(76, 175, 80, 0.6)';
+                    }
                     this.ctx.beginPath();
-                    this.ctx.arc(bullet.x, bullet.y, bulletSize * 3, 0, Math.PI * 2);
+                    this.ctx.arc(bullet.x, bullet.y, bulletSize, 0, Math.PI * 2);
                     this.ctx.fill();
-                }
-                
-                // OPTIMIZATION: Only render pulsing ring if quality allows
-                if (useGlow && renderingQuality !== 'low') {
-                    // Pulsing outer ring
-                    const pulsePhase = Math.sin(time * 4) * 0.3 + 0.7;
-                    this.ctx.strokeStyle = `rgba(129, 199, 132, ${0.6 * pulsePhase})`;
-                    this.ctx.lineWidth = 2;
-                    this.ctx.beginPath();
-                    this.ctx.arc(bullet.x, bullet.y, bulletSize + 3, 0, Math.PI * 2);
-                    this.ctx.stroke();
-                }
-                
-                // Main bullet body - always use gradient (preserve visual quality)
-                const bulletGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize);
-                bulletGradient.addColorStop(0, '#a5d6a7'); // Bright green center
-                bulletGradient.addColorStop(0.4, '#66bb6a'); // Medium green
-                bulletGradient.addColorStop(0.8, '#4caf50'); // Standard green
-                bulletGradient.addColorStop(1, '#388e3c'); // Dark green edge
-                this.ctx.fillStyle = bulletGradient;
-                
-                // Only use shadows if quality allows
-                if (useShadows) {
-                    this.ctx.shadowBlur = 8;
-                    this.ctx.shadowColor = 'rgba(76, 175, 80, 0.6)';
-                }
-                this.ctx.beginPath();
-                this.ctx.arc(bullet.x, bullet.y, bulletSize, 0, Math.PI * 2);
-                this.ctx.fill();
-                if (useShadows) {
-                    this.ctx.shadowBlur = 0;
-                }
-                
-                // OPTIMIZATION: Only render inner core if quality allows
-                if (useGradients && renderingQuality !== 'low') {
-                    // Inner bright core
-                    const coreGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 0.5);
-                    coreGradient.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
-                    coreGradient.addColorStop(0.5, 'rgba(200, 255, 200, 0.6)');
-                    coreGradient.addColorStop(1, 'rgba(76, 175, 80, 0)');
-                    this.ctx.fillStyle = coreGradient;
-                    this.ctx.beginPath();
-                    this.ctx.arc(bullet.x, bullet.y, bulletSize * 0.5, 0, Math.PI * 2);
-                    this.ctx.fill();
+                    if (useShadows) {
+                        this.ctx.shadowBlur = 0;
+                    }
+                    
+                    // OPTIMIZATION: Only render inner core if quality allows
+                    if (useGradients && renderingQuality !== 'low') {
+                        // Inner bright core
+                        const coreGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 0.5);
+                        coreGradient.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
+                        coreGradient.addColorStop(0.5, 'rgba(200, 255, 200, 0.6)');
+                        coreGradient.addColorStop(1, 'rgba(76, 175, 80, 0)');
+                        this.ctx.fillStyle = coreGradient;
+                        this.ctx.beginPath();
+                        this.ctx.arc(bullet.x, bullet.y, bulletSize * 0.5, 0, Math.PI * 2);
+                        this.ctx.fill();
+                    }
                 }
                 
                 // Calculate trail length (used for both trail rendering and particles)
@@ -23063,75 +26254,113 @@ class SpaceShooterGame {
                 const bulletSize = bullet.size || 4;
                 const angle = Math.atan2(bullet.vy, bullet.vx);
                 
-                // OPTIMIZATION: Only render glow if quality allows
-                if (useGlow && useGradients) {
-                    // Outer energy field glow - orange/amber
-                    const outerGlow = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 3.5);
-                    outerGlow.addColorStop(0, 'rgba(255, 152, 0, 0.4)');
-                    outerGlow.addColorStop(0.4, 'rgba(255, 183, 77, 0.25)');
-                    outerGlow.addColorStop(0.7, 'rgba(255, 152, 0, 0.15)');
-                    outerGlow.addColorStop(1, 'rgba(255, 152, 0, 0)');
-                    this.ctx.fillStyle = outerGlow;
-                    this.ctx.beginPath();
-                    this.ctx.arc(bullet.x, bullet.y, bulletSize * 3.5, 0, Math.PI * 2);
-                    this.ctx.fill();
+                // OPTIMIZATION: Use pre-shaded sprite if available and quality allows (eliminates gradient creation)
+                const useSprite = useGradients && renderingQuality !== 'low' && this.preShadedSprites?.rapid;
+                let sprite = null;
+                if (useSprite) {
+                    sprite = this.getPreShadedSprite('rapid', bulletSize);
                 }
                 
-                // OPTIMIZATION: Only render pulsing ring if quality allows
-                if (useGlow && renderingQuality !== 'low') {
-                    // Pulsing outer ring - faster pulse for rapid fire
-                    const pulsePhase = Math.sin(time * 6) * 0.3 + 0.7;
-                    this.ctx.strokeStyle = `rgba(255, 193, 7, ${0.7 * pulsePhase})`;
-                    this.ctx.lineWidth = 2.5;
+                if (sprite && sprite.canvas) {
+                    // Use pre-rendered sprite (much faster - no gradient creation)
+                    const spriteSize = sprite.size;
+                    this.ctx.save();
+                    this.ctx.globalAlpha = 1.0;
+                    this.ctx.drawImage(sprite.canvas, 
+                        bullet.x - spriteSize / 2, 
+                        bullet.y - spriteSize / 2, 
+                        spriteSize, spriteSize);
+                    this.ctx.restore();
+                    
+                    // OPTIMIZATION: Only render pulsing ring if quality allows
+                    if (useGlow && renderingQuality !== 'low') {
+                        // Pulsing outer ring - faster pulse for rapid fire
+                        const pulsePhase = Math.sin(time * 6) * 0.3 + 0.7;
+                        this.ctx.strokeStyle = `rgba(255, 193, 7, ${0.7 * pulsePhase})`;
+                        this.ctx.lineWidth = 2.5;
+                        if (useShadows) {
+                            this.ctx.shadowBlur = 10;
+                            this.ctx.shadowColor = 'rgba(255, 152, 0, 0.6)';
+                        }
+                        this.ctx.beginPath();
+                        this.ctx.arc(bullet.x, bullet.y, bulletSize + 4, 0, Math.PI * 2);
+                        this.ctx.stroke();
+                        if (useShadows) {
+                            this.ctx.shadowBlur = 0;
+                        }
+                    }
+                } else {
+                    // Fallback to gradient rendering (original code)
+                    // OPTIMIZATION: Only render glow if quality allows
+                    if (useGlow && useGradients) {
+                        // Outer energy field glow - orange/amber
+                        const outerGlow = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 3.5);
+                        outerGlow.addColorStop(0, 'rgba(255, 152, 0, 0.4)');
+                        outerGlow.addColorStop(0.4, 'rgba(255, 183, 77, 0.25)');
+                        outerGlow.addColorStop(0.7, 'rgba(255, 152, 0, 0.15)');
+                        outerGlow.addColorStop(1, 'rgba(255, 152, 0, 0)');
+                        this.ctx.fillStyle = outerGlow;
+                        this.ctx.beginPath();
+                        this.ctx.arc(bullet.x, bullet.y, bulletSize * 3.5, 0, Math.PI * 2);
+                        this.ctx.fill();
+                    }
+                    
+                    // OPTIMIZATION: Only render pulsing ring if quality allows
+                    if (useGlow && renderingQuality !== 'low') {
+                        // Pulsing outer ring - faster pulse for rapid fire
+                        const pulsePhase = Math.sin(time * 6) * 0.3 + 0.7;
+                        this.ctx.strokeStyle = `rgba(255, 193, 7, ${0.7 * pulsePhase})`;
+                        this.ctx.lineWidth = 2.5;
+                        if (useShadows) {
+                            this.ctx.shadowBlur = 10;
+                            this.ctx.shadowColor = 'rgba(255, 152, 0, 0.6)';
+                        }
+                        this.ctx.beginPath();
+                        this.ctx.arc(bullet.x, bullet.y, bulletSize + 4, 0, Math.PI * 2);
+                        this.ctx.stroke();
+                        if (useShadows) {
+                            this.ctx.shadowBlur = 0;
+                        }
+                    }
+                    
+                    // Main bullet body
+                    if (useGradients) {
+                        // Use gradient
+                        const bulletGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize);
+                        bulletGradient.addColorStop(0, '#ffb74d'); // Bright orange center
+                        bulletGradient.addColorStop(0.3, '#ff9800'); // Standard orange
+                        bulletGradient.addColorStop(0.7, '#f57c00'); // Dark orange
+                        bulletGradient.addColorStop(1, '#e65100'); // Very dark orange edge
+                        this.ctx.fillStyle = bulletGradient;
+                    } else {
+                        // Use solid color (much faster)
+                        this.ctx.fillStyle = '#ff9800';
+                    }
+                    
+                    // OPTIMIZATION: Only use shadows if quality allows
                     if (useShadows) {
                         this.ctx.shadowBlur = 10;
-                        this.ctx.shadowColor = 'rgba(255, 152, 0, 0.6)';
+                        this.ctx.shadowColor = 'rgba(255, 152, 0, 0.7)';
                     }
                     this.ctx.beginPath();
-                    this.ctx.arc(bullet.x, bullet.y, bulletSize + 4, 0, Math.PI * 2);
-                    this.ctx.stroke();
+                    this.ctx.arc(bullet.x, bullet.y, bulletSize, 0, Math.PI * 2);
+                    this.ctx.fill();
                     if (useShadows) {
                         this.ctx.shadowBlur = 0;
                     }
-                }
-                
-                // Main bullet body
-                if (useGradients) {
-                    // Use gradient
-                    const bulletGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize);
-                    bulletGradient.addColorStop(0, '#ffb74d'); // Bright orange center
-                    bulletGradient.addColorStop(0.3, '#ff9800'); // Standard orange
-                    bulletGradient.addColorStop(0.7, '#f57c00'); // Dark orange
-                    bulletGradient.addColorStop(1, '#e65100'); // Very dark orange edge
-                    this.ctx.fillStyle = bulletGradient;
-                } else {
-                    // Use solid color (much faster)
-                    this.ctx.fillStyle = '#ff9800';
-                }
-                
-                // OPTIMIZATION: Only use shadows if quality allows
-                if (useShadows) {
-                    this.ctx.shadowBlur = 10;
-                    this.ctx.shadowColor = 'rgba(255, 152, 0, 0.7)';
-                }
-                this.ctx.beginPath();
-                this.ctx.arc(bullet.x, bullet.y, bulletSize, 0, Math.PI * 2);
-                this.ctx.fill();
-                if (useShadows) {
-                    this.ctx.shadowBlur = 0;
-                }
-                
-                // OPTIMIZATION: Only render inner core if quality allows
-                if (useGradients && renderingQuality !== 'low') {
-                    // Inner bright core - white to orange
-                    const coreGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 0.6);
-                    coreGradient.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
-                    coreGradient.addColorStop(0.4, 'rgba(255, 224, 178, 0.7)');
-                    coreGradient.addColorStop(1, 'rgba(255, 152, 0, 0)');
-                    this.ctx.fillStyle = coreGradient;
-                    this.ctx.beginPath();
-                    this.ctx.arc(bullet.x, bullet.y, bulletSize * 0.6, 0, Math.PI * 2);
-                    this.ctx.fill();
+                    
+                    // OPTIMIZATION: Only render inner core if quality allows
+                    if (useGradients && renderingQuality !== 'low') {
+                        // Inner bright core - white to orange
+                        const coreGradient = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 0.6);
+                        coreGradient.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
+                        coreGradient.addColorStop(0.4, 'rgba(255, 224, 178, 0.7)');
+                        coreGradient.addColorStop(1, 'rgba(255, 152, 0, 0)');
+                        this.ctx.fillStyle = coreGradient;
+                        this.ctx.beginPath();
+                        this.ctx.arc(bullet.x, bullet.y, bulletSize * 0.6, 0, Math.PI * 2);
+                        this.ctx.fill();
+                    }
                 }
                 
                 // Calculate trail length (used for both trail rendering and particles)
@@ -23249,19 +26478,26 @@ class SpaceShooterGame {
                 const bulletSize = bullet.size || 5;
                 const angle = Math.atan2(bullet.vy, bullet.vx);
                 
-                // Pre-shaded sprite (outer glow + body + core) to avoid per-bullet gradients
-                const spreadSprite = this.getPreShadedSprite('spread', bulletSize);
-                if (spreadSprite && spreadSprite.canvas) {
-                    const scale = bulletSize / spreadSprite.baseRadius;
-                    const drawSize = spreadSprite.size * scale;
-                    this.ctx.drawImage(
-                        spreadSprite.canvas,
-                        bullet.x - drawSize / 2,
-                        bullet.y - drawSize / 2,
-                        drawSize,
-                        drawSize
-                    );
+                // OPTIMIZATION: Use pre-shaded sprite if available and quality allows (eliminates gradient creation)
+                const useSprite = useGradients && renderingQuality !== 'low' && this.preShadedSprites?.spread;
+                let sprite = null;
+                if (useSprite) {
+                    sprite = this.getPreShadedSprite('spread', bulletSize);
+                }
+                
+                if (sprite && sprite.canvas) {
+                    // Use pre-rendered sprite (much faster - no gradient creation)
+                    const spriteSize = sprite.size;
+                    const drawSize = bulletSize * 2.2; // Scale to match original size
+                    this.ctx.save();
+                    this.ctx.globalAlpha = 1.0;
+                    this.ctx.drawImage(sprite.canvas, 
+                        bullet.x - spriteSize / 2, 
+                        bullet.y - spriteSize / 2, 
+                        spriteSize, spriteSize);
+                    this.ctx.restore();
                 } else {
+                    // Fallback to gradient rendering (original code)
                     // Fallback: draw gradients directly if sprite cache is unavailable
                     // Outer energy field glow - purple/magenta
                     const outerGlow = this.ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, bulletSize * 3.2);
@@ -25420,12 +28656,11 @@ class SpaceShooterGame {
                 }
                 
                 if (isFireParticle) {
-                    // Fire/explosion particles - orange to red gradient
-                    const gradient = this.ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size || 5);
-                    gradient.addColorStop(0, '#ffeb3b'); // Bright yellow center
-                    gradient.addColorStop(0.3, '#ff9800'); // Orange
-                    gradient.addColorStop(0.7, '#f44336'); // Red
-                    gradient.addColorStop(1, '#c62828'); // Dark red edge
+                    // OPTIMIZATION: Use cached fire gradient
+                    const particleSize = p.size || 5;
+                    const sizeBucket = this.getParticleSizeBucket(particleSize);
+                    const cachedGradient = this.getCachedFireGradient(p, sizeBucket);
+                    const gradient = this.createParticleGradientFromCache(p, cachedGradient);
                     
                     this.ctx.fillStyle = gradient;
             this.ctx.beginPath();
@@ -25443,16 +28678,69 @@ class SpaceShooterGame {
                     this.ctx.arc(p.x, p.y, (p.size || 5) * 0.4, 0, Math.PI * 2);
                     this.ctx.fill();
                 } else {
-                    // Generic particles - simple rendering with glow
-                    this.ctx.fillStyle = p.color || '#ffffff';
-                    this.ctx.beginPath();
-                    this.ctx.arc(p.x, p.y, p.size || 5, 0, Math.PI * 2);
+                    // Enhanced particles - animated like materials with pulse, gradients, and rings
+                    const time = this.time || 0;
+                    const particleSize = p.size || 5;
+                    const pulseIntensity = 0.7 + Math.sin(time * 3 + p.x * 0.1 + p.y * 0.1) * 0.3;
+                    const lifePercent = p.lifetime && p.maxLifetime ? (p.lifetime / p.maxLifetime) : 1;
                     
-                    // Add glow effect
-                    this.ctx.shadowBlur = (p.size || 5) * 1.5;
-                    this.ctx.shadowColor = p.color || '#ffffff';
+                    // OPTIMIZATION: Use cached gradients for common particle types
+                    const baseColor = p.color || '#ffffff';
+                    const sizeBucket = this.getParticleSizeBucket(particleSize);
+                    let cachedGradient = null;
+                    let gradient = null;
+                    
+                    if (baseColor === '#4fc3f7' || baseColor === '#88ccff' || baseColor === '#00bcd4') {
+                        // Blue particles - use cached blue gradient
+                        cachedGradient = this.getCachedBlueParticleGradient(p, sizeBucket);
+                        gradient = this.createParticleGradientFromCache(p, cachedGradient);
+                    } else if (baseColor === '#ff8800' || baseColor === '#ffaa00' || baseColor === '#ff8844' || 
+                               baseColor === '#ff9800' || baseColor === '#ff6b00') {
+                        // Orange particles - use cached orange gradient
+                        cachedGradient = this.getCachedOrangeParticleGradient(p, sizeBucket);
+                        gradient = this.createParticleGradientFromCache(p, cachedGradient);
+                    } else {
+                        // Default - create gradient for other colors (less common, so no cache needed)
+                        gradient = this.ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, particleSize);
+                        gradient.addColorStop(0, '#ffffff');
+                        gradient.addColorStop(0.5, baseColor);
+                        gradient.addColorStop(1, baseColor);
+                    }
+                    
+                    // Outer glow effect
+                    this.ctx.shadowBlur = particleSize * 3 * pulseIntensity;
+                    this.ctx.shadowColor = baseColor;
+                    
+                    // Main particle with gradient
+                    this.ctx.fillStyle = gradient;
+                    this.ctx.globalAlpha = (p.alpha || 1) * lifePercent * pulseIntensity;
+                    this.ctx.beginPath();
+                    this.ctx.arc(p.x, p.y, particleSize * pulseIntensity, 0, Math.PI * 2);
                     this.ctx.fill();
+                    
+                    // Inner bright core
+                    this.ctx.fillStyle = `rgba(255, 255, 255, ${(p.alpha || 1) * 0.8 * lifePercent})`;
+                    this.ctx.beginPath();
+                    this.ctx.arc(p.x, p.y, particleSize * 0.4 * pulseIntensity, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    
+                    // Orbiting rings for larger particles
+                    if (particleSize > 3) {
+                        this.ctx.strokeStyle = `rgba(255, 255, 255, ${0.4 * pulseIntensity * lifePercent})`;
+                        this.ctx.lineWidth = 1;
+                        for (let i = 0; i < 2; i++) {
+                            const ringAngle = time * 0.8 + i * Math.PI + p.x * 0.01;
+                            const ringRadius = particleSize * 0.7;
+                            const ringX = p.x + Math.cos(ringAngle) * ringRadius;
+                            const ringY = p.y + Math.sin(ringAngle) * ringRadius;
+                            this.ctx.beginPath();
+                            this.ctx.arc(ringX, ringY, particleSize * 0.3, 0, Math.PI * 2);
+                            this.ctx.stroke();
+                        }
+                    }
+                    
                     this.ctx.shadowBlur = 0;
+                    this.ctx.globalAlpha = 1;
                 }
                 
                 this.ctx.restore();
@@ -25719,7 +29007,7 @@ class SpaceShooterGame {
             this.ctx.fillStyle = '#4caf50';
             this.ctx.font = 'bold 14px Arial';
             this.ctx.textAlign = 'left';
-            this.ctx.fillText('🔨 Hammer Equipped', 20, this.canvas.height - 40);
+            this.ctx.fillText('ðŸ”¨ Hammer Equipped', 20, this.canvas.height - 40);
             this.ctx.fillStyle = '#fff';
             this.ctx.font = '12px Arial';
             this.ctx.fillText('All items at full durability', 20, this.canvas.height - 20);
@@ -25733,7 +29021,7 @@ class SpaceShooterGame {
         this.ctx.fillStyle = '#ff9800';
         this.ctx.font = 'bold 14px Arial';
         this.ctx.textAlign = 'left';
-        this.ctx.fillText('🔨 Hammer Equipped - Press Q to Repair', 20, this.canvas.height - 60 - (this.repairableItems.length * 25));
+        this.ctx.fillText('ðŸ”¨ Hammer Equipped - Press Q to Repair', 20, this.canvas.height - 60 - (this.repairableItems.length * 25));
         
         // Show list of repairable items
         this.repairableItems.forEach((item, index) => {
@@ -25759,13 +29047,13 @@ class SpaceShooterGame {
         let deathIcon = '';
         if (this.deathReason === 'hunger') {
             deathMessage = 'You starved to death!';
-            deathIcon = '🍽️';
+            deathIcon = 'ðŸ½ï¸';
         } else if (this.deathReason === 'health') {
             deathMessage = 'You were destroyed in combat!';
-            deathIcon = '💥';
+            deathIcon = 'ðŸ’¥';
         } else {
             deathMessage = 'You were defeated!';
-            deathIcon = '💀';
+            deathIcon = 'ðŸ’€';
         }
         
         this.ctx.fillStyle = '#ff9800';
@@ -25851,7 +29139,7 @@ class SpaceShooterGame {
         `;
         
         notification.innerHTML = `
-            <div style="font-size: 2em; margin-bottom: 15px;">🎉</div>
+            <div style="font-size: 2em; margin-bottom: 15px;">ðŸŽ‰</div>
             <div style="margin-bottom: 10px;">HIDDEN SEQUENCE COMPLETE!</div>
             <div style="font-size: 0.9em; font-weight: normal; margin-top: 15px; opacity: 0.95;">
                 Save Feature Unlocked!<br>
@@ -26092,6 +29380,25 @@ class SpaceShooterGame {
         
         console.log(`[Cutscene] Starting cutscene: ${this.cutsceneId}, phase: ${this.cutscenePhase}`);
         
+        // Stop any currently playing music when entering a cutscene
+        this.stopAllMusic('cutscene start');
+        
+        // Hide cursor for Will's-Way-Studios intro (ship is drawn at mouse position)
+        if (this.cutsceneId === 'willsWayIntro') {
+            if (this.cutsceneCanvas) {
+                this.cutsceneCanvas.style.cursor = 'none';
+            }
+            // Also hide cursor on overlay
+            if (this.cutsceneOverlay) {
+                this.cutsceneOverlay.style.cursor = 'none';
+            }
+            document.body.style.cursor = 'none';
+        } else {
+            if (this.cutsceneCanvas) {
+                this.cutsceneCanvas.style.cursor = 'default';
+            }
+        }
+        
         // Ensure overlay and canvas elements exist
         if (!this.cutsceneOverlay) {
             console.error('[Cutscene] cutsceneOverlay element not found!');
@@ -26142,12 +29449,23 @@ class SpaceShooterGame {
         // Setup skip button (double-click to skip)
         const skipBtn = document.getElementById('cutsceneSkip');
         if (skipBtn) {
-            skipBtn.ondblclick = () => this.skipCutscene();
+            skipBtn.ondblclick = () => {
+                // Prevent skipping Phase 0 and Phase 1 of willsWayIntro (new intro with puzzle and SpaceBell interaction)
+                if (this.cutsceneId === 'willsWayIntro' && (this.cutscenePhase === 0 || this.cutscenePhase === 1)) {
+                    return; // Cannot skip Phase 0 (puzzle) or Phase 1 (SpaceBell interaction)
+                }
+                this.skipCutscene();
+            };
         }
         
         // Setup keyboard/mouse skip
         // Store handler reference so we can remove it later
         this._cutsceneSkipHandler = (e) => {
+            // Prevent skipping Phase 0 and Phase 1 of willsWayIntro (new intro with puzzle and SpaceBell interaction)
+            if (this.cutsceneId === 'willsWayIntro' && (this.cutscenePhase === 0 || this.cutscenePhase === 1)) {
+                return; // Cannot skip Phase 0 (puzzle) or Phase 1 (SpaceBell interaction)
+            }
+            
             // Only skip on keyboard (Space/Enter) - single press is fine for keyboard
             if (e.key === ' ' || e.key === 'Enter') {
                 this.skipCutscene();
@@ -26188,6 +29506,12 @@ class SpaceShooterGame {
     }
     
     skipCutscene() {
+        // Prevent skipping Phase 0 and Phase 1 of willsWayIntro (new intro with puzzle and SpaceBell interaction)
+        if (this.cutsceneId === 'willsWayIntro' && (this.cutscenePhase === 0 || this.cutscenePhase === 1)) {
+            console.log('[Cutscene] Cannot skip Phase 0 or Phase 1 of willsWayIntro');
+            return; // Cannot skip Phase 0 (puzzle) or Phase 1 (SpaceBell interaction)
+        }
+        
         // Don't save skip preference - cutscene will show again next time
         console.log('[Cutscene] Skipping cutscene');
         this.removeCutsceneSkipHandlers();
@@ -26268,6 +29592,13 @@ class SpaceShooterGame {
             // Manual cutscene or opening cutscene - return to game
             this.clearPauseUI();
             this.gameState = 'playing';
+            
+            // After cutscene, start music once when gameplay resumes
+            const canStartMusic = this.gameState === 'playing' && !this.cutsceneId && !this.isPaused;
+            if (canStartMusic && (!this.audio.currentMusicElement || this.audio.currentMusicElement.paused)) {
+                console.log('[Cutscene] All cutscenes complete - starting game music');
+                this.startMainMusicIfAllowed({ fadeIn: true });
+            }
             this.levelUpState = false;
             this.awaitingOpeningCutscene = false;
             // Avoid a huge delta on first frame after a long cutscene
@@ -26279,12 +29610,8 @@ class SpaceShooterGame {
             if (currentCutsceneId === 'opening') {
                 this.resumeAfterOpeningCutscene();
             }
-            // Start main music if not already playing
-            if (!wasManual) {
-                console.log('[Game] Cutscene ended, starting main music');
-                this.audio.playMusic('main', true, true);
-                this.showNameInputDelayed();
-            }
+            // Start main music if not already playing (handled above)
+            this.showNameInputDelayed();
         }
     }
     
@@ -26324,7 +29651,275 @@ class SpaceShooterGame {
         this.cutsceneTime += deltaTime;
         
         // Handle different cutscenes based on ID
-        if (this.cutsceneId === 'intro') {
+        if (this.cutsceneId === 'willsWayIntro') {
+            // New intro: Phase 0 = Will's-Way-Studios logo animation, Phase 1 = SpaceBell interactive
+            if (this.cutscenePhase === 0) {
+                // Phase 0: Will's-Way-Studios logo - can be shot and moved
+                // Initialize logo data if needed
+                const w = this.cutsceneCanvas ? this.cutsceneCanvas.width : window.innerWidth;
+                const h = this.cutsceneCanvas ? this.cutsceneCanvas.height : window.innerHeight;
+                if (!this.willsWayIntroData) {
+                    this.willsWayIntroData = {
+                        logoX: w * 0.5,
+                        logoY: h * 0.5,
+                        logoVx: 0,
+                        logoVy: 0,
+                        shipX: w * 0.5,
+                        shipY: h * 0.8,
+                        shipAngle: Math.PI / 2,
+                        bullets: [],
+                        lastShootTime: 0,
+                        // Puzzle system
+                        hitSequence: [],           // Track sequence of hit directions
+                        puzzle1Solved: false,      // First puzzle: down, down, up
+                        puzzle2Solved: false,     // Second puzzle: down, up, left, right
+                        puzzleSolved: {},          // Track which puzzles are solved (by puzzle number)
+                        totalPuzzlesSolved: 0,     // Count of solved puzzles
+                        puzzleTimeLimit: 8,        // Current time limit (extends with puzzles)
+                        puzzleMessage: null,        // Current puzzle message to display
+                        puzzleMessageTime: 0       // Time when message appeared
+                    };
+                } else {
+                    // Ensure logo position is initialized
+                    if (this.willsWayIntroData.logoX === undefined) {
+                        this.willsWayIntroData.logoX = w * 0.5;
+                    }
+                    if (this.willsWayIntroData.logoY === undefined) {
+                        this.willsWayIntroData.logoY = h * 0.5;
+                    }
+                    if (this.willsWayIntroData.logoVx === undefined) {
+                        this.willsWayIntroData.logoVx = 0;
+                    }
+                    if (this.willsWayIntroData.logoVy === undefined) {
+                        this.willsWayIntroData.logoVy = 0;
+                    }
+                    if (this.willsWayIntroData.shipX === undefined) {
+                        this.willsWayIntroData.shipX = w * 0.5;
+                    }
+                    if (this.willsWayIntroData.shipY === undefined) {
+                        this.willsWayIntroData.shipY = h * 0.8;
+                    }
+                    if (this.willsWayIntroData.shipAngle === undefined) {
+                        this.willsWayIntroData.shipAngle = Math.PI / 2;
+                    }
+                    if (!this.willsWayIntroData.bullets) {
+                        this.willsWayIntroData.bullets = [];
+                    }
+                    if (!this.willsWayIntroData.lastShootTime) {
+                        this.willsWayIntroData.lastShootTime = 0;
+                    }
+                    // Initialize puzzle system if not present
+                    if (!this.willsWayIntroData.hitSequence) {
+                        this.willsWayIntroData.hitSequence = [];
+                    }
+                    if (this.willsWayIntroData.puzzle1Solved === undefined) {
+                        this.willsWayIntroData.puzzle1Solved = false;
+                    }
+                    if (this.willsWayIntroData.puzzle2Solved === undefined) {
+                        this.willsWayIntroData.puzzle2Solved = false;
+                    }
+                    if (this.willsWayIntroData.puzzleTimeLimit === undefined) {
+                        this.willsWayIntroData.puzzleTimeLimit = 8;
+                    }
+                    if (this.willsWayIntroData.puzzleMessage === undefined) {
+                        this.willsWayIntroData.puzzleMessage = null;
+                    }
+                    if (this.willsWayIntroData.puzzleMessageTime === undefined) {
+                        this.willsWayIntroData.puzzleMessageTime = 0;
+                    }
+                    if (!this.willsWayIntroData.puzzleSolved) {
+                        this.willsWayIntroData.puzzleSolved = {};
+                    }
+                    if (this.willsWayIntroData.totalPuzzlesSolved === undefined) {
+                        this.willsWayIntroData.totalPuzzlesSolved = 0;
+                    }
+                }
+                
+                const data = this.willsWayIntroData;
+                
+                // Update ship position (follow mouse) - SAME AS PHASE 1
+                // Get mouse position relative to cutscene canvas
+                let targetX = data.shipX;
+                let targetY = data.shipY;
+                
+                if (this.mouse && this.cutsceneCanvas) {
+                    // Convert mouse coordinates to cutscene canvas coordinates
+                    const canvasRect = this.cutsceneCanvas.getBoundingClientRect();
+                    const mainCanvasRect = this.canvas.getBoundingClientRect();
+                    // Convert main canvas mouse position to cutscene canvas coordinates
+                    targetX = this.mouse.x + (mainCanvasRect.left - canvasRect.left);
+                    targetY = this.mouse.y + (mainCanvasRect.top - canvasRect.top);
+                    
+                    // Clamp to canvas bounds
+                    targetX = Math.max(0, Math.min(w, targetX));
+                    targetY = Math.max(0, Math.min(h, targetY));
+                    
+                    // Smooth interpolation
+                    data.shipX += (targetX - data.shipX) * 0.15;
+                    data.shipY += (targetY - data.shipY) * 0.15;
+                    
+                    // Update ship angle
+                    const dx = targetX - data.shipX;
+                    const dy = targetY - data.shipY;
+                    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                        data.shipAngle = Math.atan2(dy, dx) + Math.PI / 2;
+                    }
+                }
+                
+                // Update logo physics (apply velocity and friction)
+                data.logoX += data.logoVx * deltaTime;
+                data.logoY += data.logoVy * deltaTime;
+                
+                // Apply friction (slower decay for more responsive movement)
+                data.logoVx *= 0.98;
+                data.logoVy *= 0.98;
+                
+                // Stop very small velocities
+                if (Math.abs(data.logoVx) < 1) data.logoVx = 0;
+                if (Math.abs(data.logoVy) < 1) data.logoVy = 0;
+                
+                // Keep logo within screen bounds
+                const logoWidth = 400; // Approximate logo width
+                const logoHeight = 100; // Approximate logo height
+                const padding = 50;
+                if (data.logoX - logoWidth * 0.5 < padding) {
+                    data.logoX = padding + logoWidth * 0.5;
+                    data.logoVx = 0;
+                }
+                if (data.logoX + logoWidth * 0.5 > w - padding) {
+                    data.logoX = w - padding - logoWidth * 0.5;
+                    data.logoVx = 0;
+                }
+                if (data.logoY - logoHeight * 0.5 < padding) {
+                    data.logoY = padding + logoHeight * 0.5;
+                    data.logoVy = 0;
+                }
+                if (data.logoY + logoHeight * 0.5 > h - padding) {
+                    data.logoY = h - padding - logoHeight * 0.5;
+                    data.logoVy = 0;
+                }
+                
+                // Update bullets
+                data.bullets = data.bullets.filter(bullet => {
+                    bullet.x += bullet.vx * deltaTime;
+                    bullet.y += bullet.vy * deltaTime;
+                    bullet.lifetime -= deltaTime;
+                    
+                    // Check for logo hit
+                    if (bullet.lifetime > 0 && !bullet.hasHit) {
+                        this.checkWWSLogoHit(bullet, data, w, h);
+                    }
+                    
+                    return bullet.lifetime > 0;
+                });
+                
+                // Update hit particles
+                if (data.hitParticles) {
+                    data.hitParticles = data.hitParticles.filter(particle => {
+                        particle.x += particle.vx * deltaTime;
+                        particle.y += particle.vy * deltaTime;
+                        particle.lifetime -= deltaTime;
+                        // Apply friction to particles
+                        particle.vx *= 0.95;
+                        particle.vy *= 0.95;
+                        return particle.lifetime > 0;
+                    });
+                }
+                
+                // Check puzzle sequences
+                this.checkPuzzleSequences(data);
+                
+                // Update puzzle message display time
+                if (data.puzzleMessage && data.puzzleMessageTime > 0) {
+                    const messageAge = this.cutsceneTime - data.puzzleMessageTime;
+                    if (messageAge > 3) { // Show message for 3 seconds
+                        data.puzzleMessage = null;
+                        data.puzzleMessageTime = 0;
+                    }
+                }
+                
+                // Auto-advance after time limit (extends with puzzles)
+                const timeLimit = data.puzzleTimeLimit || 8;
+                if (this.cutsceneTime > timeLimit) {
+                    console.log('[Cutscene] Transitioning from Phase 0 to Phase 1');
+                    this.cutscenePhase = 1;
+                    this.cutsceneTime = 0;
+                    // Initialize SpaceBell interactive phase data
+                    if (!this.willsWayIntroData.letterLights) {
+                        this.willsWayIntroData.letterLights = {};
+                        this.willsWayIntroData.letterHitEffects = {};
+                        this.willsWayIntroData.shipX = w * 0.5;
+                        this.willsWayIntroData.shipY = h * 0.8;
+                        this.willsWayIntroData.shipAngle = Math.PI / 2;
+                        this.willsWayIntroData.allLettersLit = false;
+                    }
+                    console.log('[Cutscene] Phase 1 initialized, cutscenePhase:', this.cutscenePhase);
+                }
+            } else if (this.cutscenePhase === 1) {
+                // Phase 1: SpaceBell interactive - player shoots letters
+                // Update bullets and effects
+                if (this.willsWayIntroData) {
+                    const data = this.willsWayIntroData;
+                    data.bullets = data.bullets.filter(bullet => {
+                        bullet.x += bullet.vx * deltaTime;
+                        bullet.y += bullet.vy * deltaTime;
+                        bullet.lifetime -= deltaTime;
+                        
+                        // Check for letter hits
+                        if (bullet.lifetime > 0 && !bullet.hasHit) {
+                            const w = this.cutsceneCanvas ? this.cutsceneCanvas.width : window.innerWidth;
+                            const h = this.cutsceneCanvas ? this.cutsceneCanvas.height : window.innerHeight;
+                            this.checkLetterHit(bullet, data, w, h);
+                        }
+                        
+                        return bullet.lifetime > 0;
+                    });
+                    
+                    // Update ring effects time
+                    Object.values(data.letterHitEffects).forEach(effect => {
+                        if (effect.isActive) {
+                            effect.time += deltaTime;
+                            if (effect.time >= 1.0) {
+                                effect.isActive = false;
+                            }
+                        }
+                    });
+                }
+                
+                // Check if all letters are lit (using unique IDs)
+                const letterIds = ['S', 'p', 'a', 'c', 'e1', 'B', 'e2', 'l1', 'l2'];
+                const allLit = this.willsWayIntroData && letterIds.every(letterId => this.willsWayIntroData.letterLights[letterId] === true);
+                
+                if (allLit && !this.willsWayIntroData.allLettersLit) {
+                    this.willsWayIntroData.allLettersLit = true;
+                    // Mark that we should transition after a delay
+                    this.willsWayIntroData.transitionTime = this.cutsceneTime + 1.0; // 1 second delay
+                }
+                
+                // Check if it's time to transition
+                if (this.willsWayIntroData && this.willsWayIntroData.allLettersLit && this.cutsceneTime >= this.willsWayIntroData.transitionTime) {
+                    this.endCutscene();
+                    // Transition to preshading
+                    if (!this.preloadComplete) {
+                        this.runPreload().then(() => {
+                            // After preshading, go to existing intro
+                            this.cutsceneId = 'intro';
+                            this.cutscenePhase = 0;
+                            this.cutsceneTime = 0;
+                            this.gameState = 'cutscene';
+                            this.startCutscene();
+                        });
+                    } else {
+                        // Preload already complete, go straight to intro
+                        this.cutsceneId = 'intro';
+                        this.cutscenePhase = 0;
+                        this.cutsceneTime = 0;
+                        this.gameState = 'cutscene';
+                        this.startCutscene();
+                    }
+                }
+            }
+        } else if (this.cutsceneId === 'intro') {
             // Intro pacing: ~32s total across 4 phases
             if (this.cutscenePhase === 0 && this.cutsceneTime > 8) {
                 this.cutscenePhase = 1;
@@ -26456,7 +30051,9 @@ class SpaceShooterGame {
         ctx.shadowOffsetY = 0;
     }
     
-    // Helper function to draw detailed Bell character
+// NEW HIGH-QUALITY BELL CHARACTER - Completely redesigned from scratch
+    // Advanced rendering with multiple light sources, realistic proportions, and detailed features
+    // Based on John Stewart Bell (1928-1990) - Northern Irish physicist, fair complexion, glasses, lab coat, dark hair
     drawBellCharacter(ctx, x, y, scale = 1, alpha = 1, time = 0) {
         ctx.save();
         ctx.globalAlpha = alpha;
@@ -26847,505 +30444,719 @@ class SpaceShooterGame {
         ctx.restore();
     }
     
-    // Helper function to draw detailed Einstein character
+    // NEW HIGH-QUALITY CHARACTER - Completely redesigned from scratch
+    // Advanced rendering with multiple light sources, realistic proportions, and detailed features
+// NEW HIGH-QUALITY CHARACTER - Completely redesigned from scratch
+    // Advanced rendering with multiple light sources, realistic proportions, and detailed features
     drawEinsteinCharacter(ctx, x, y, scale = 1, alpha = 1, time = 0) {
         ctx.save();
         ctx.globalAlpha = alpha;
         ctx.translate(x, y);
         
-        // Breathing animation - subtle vertical movement
-        const breathOffset = Math.sin((time || 0) * 1.0) * 2;
+        const t = time || 0;
+        
+        // Natural breathing and micro-movements
+        const breathOffset = Math.sin(t * 0.75) * 1.2;
+        const breathScale = 1.0 + Math.sin(t * 0.75) * 0.006;
         ctx.translate(0, breathOffset);
+        ctx.scale(scale * breathScale, scale * breathScale);
         
-        ctx.scale(scale, scale);
+        // Professional shadow with soft falloff
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+        ctx.shadowBlur = 50;
+        ctx.shadowOffsetX = 12;
+        ctx.shadowOffsetY = 12;
         
-        // Enhanced shadow with glow
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
-        ctx.shadowBlur = 25;
-        ctx.shadowOffsetX = 5;
-        ctx.shadowOffsetY = 5;
+        // ========== HEAD - Professional Proportions ==========
+        const headRadius = 26;
+        const headCenterY = -14;
         
-        // ========== HEAD ==========
-        // Head base with enhanced skin tone gradient (warmer, more aged)
-        const headGradient = ctx.createRadialGradient(-3, -12, 0, 0, -10, 20);
-        headGradient.addColorStop(0, '#ffe8c8'); // Center highlight
-        headGradient.addColorStop(0.3, '#ffe0b8');
-        headGradient.addColorStop(0.6, '#ffc088');
-        headGradient.addColorStop(0.9, '#ffaa44');
-        headGradient.addColorStop(1, '#ff8844'); // Edge shadow (warmer)
-        ctx.fillStyle = headGradient;
+        // Base head shape with realistic skin tones
+        const headBaseGradient = ctx.createRadialGradient(-4, headCenterY - 2, 0, 0, headCenterY, headRadius);
+        headBaseGradient.addColorStop(0, '#faf0e6'); // Very light warm skin
+        headBaseGradient.addColorStop(0.25, '#f5e6d6');
+        headBaseGradient.addColorStop(0.5, '#ebd4c0');
+        headBaseGradient.addColorStop(0.75, '#dcc4a8');
+        headBaseGradient.addColorStop(1, '#c8b090'); // Warm shadow
+        ctx.fillStyle = headBaseGradient;
         ctx.beginPath();
-        ctx.arc(0, -10, 20, 0, Math.PI * 2);
+        ctx.ellipse(0, headCenterY, headRadius * 0.8, headRadius, 0, 0, Math.PI * 2);
         ctx.fill();
         
-        // Head shadow (chin and jaw area)
-        ctx.fillStyle = 'rgba(200, 150, 100, 0.4)';
+        // Primary light source (top-left, key light)
+        const keyLight = ctx.createRadialGradient(-10, headCenterY - 6, 0, -10, headCenterY - 6, 22);
+        keyLight.addColorStop(0, 'rgba(255, 250, 245, 0.8)');
+        keyLight.addColorStop(0.4, 'rgba(255, 250, 245, 0.4)');
+        keyLight.addColorStop(0.8, 'rgba(255, 250, 245, 0.1)');
+        keyLight.addColorStop(1, 'rgba(255, 250, 245, 0)');
+        ctx.fillStyle = keyLight;
         ctx.beginPath();
-        ctx.ellipse(0, 2, 16, 10, 0, 0, Math.PI * 2);
+        ctx.ellipse(-2, headCenterY - 2, headRadius * 0.75, headRadius * 0.95, 0, 0, Math.PI * 2);
         ctx.fill();
         
-        // Forehead wrinkles (characteristic of Einstein - more detailed)
-        ctx.strokeStyle = 'rgba(200, 150, 100, 0.5)';
-        ctx.lineWidth = 1.5;
-        for (let i = 0; i < 5; i++) {
-            const wrinkleY = -22 - i * 1.5;
-            ctx.beginPath();
-            ctx.moveTo(-10 + i * 2, wrinkleY);
-            ctx.lineTo(-8 + i * 2, wrinkleY + 1);
-            ctx.stroke();
-        }
-        // Side wrinkles
-        ctx.strokeStyle = 'rgba(200, 150, 100, 0.4)';
-        ctx.lineWidth = 1;
-        for (let i = 0; i < 3; i++) {
-            ctx.beginPath();
-            ctx.moveTo(-14, -18 + i * 2);
-            ctx.lineTo(-12, -17 + i * 2);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(14, -18 + i * 2);
-            ctx.lineTo(12, -17 + i * 2);
-            ctx.stroke();
-        }
+        // Fill light (right side, softer)
+        const fillLight = ctx.createRadialGradient(12, headCenterY - 4, 0, 12, headCenterY - 4, 18);
+        fillLight.addColorStop(0, 'rgba(255, 240, 220, 0.4)');
+        fillLight.addColorStop(0.6, 'rgba(255, 240, 220, 0.15)');
+        fillLight.addColorStop(1, 'rgba(255, 240, 220, 0)');
+        ctx.fillStyle = fillLight;
+        ctx.beginPath();
+        ctx.ellipse(2, headCenterY, headRadius * 0.7, headRadius * 0.9, 0, 0, Math.PI * 2);
+        ctx.fill();
         
-        // ========== HAIR ==========
-        // Enhanced wild white hair with subtle animation (Einstein's signature)
-        // Base hair layer
-        const hairBaseGradient = ctx.createRadialGradient(0, -12, 0, 0, -12, 25);
-        hairBaseGradient.addColorStop(0, '#fffef8');
-        hairBaseGradient.addColorStop(0.5, '#fff8e0');
-        hairBaseGradient.addColorStop(1, '#ffe8c0');
+        // Rim light (back edge, subtle)
+        const rimLight = ctx.createRadialGradient(8, headCenterY + 8, 0, 8, headCenterY + 8, 15);
+        rimLight.addColorStop(0, 'rgba(200, 200, 220, 0.2)');
+        rimLight.addColorStop(1, 'rgba(200, 200, 220, 0)');
+        ctx.fillStyle = rimLight;
+        ctx.beginPath();
+        ctx.ellipse(4, headCenterY + 4, headRadius * 0.6, headRadius * 0.8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // ========== HAIR - Professional Wild White Hair ==========
+        const hairCenterY = headCenterY - 4;
+        const hairRadius = 34;
+        
+        // Hair base with volume
+        const hairBaseGradient = ctx.createRadialGradient(0, hairCenterY, 0, 0, hairCenterY, hairRadius);
+        hairBaseGradient.addColorStop(0, '#ffffff');
+        hairBaseGradient.addColorStop(0.2, '#faf8f5');
+        hairBaseGradient.addColorStop(0.5, '#f5f0e8');
+        hairBaseGradient.addColorStop(0.8, '#e8e0d8');
+        hairBaseGradient.addColorStop(1, '#d8d0c8');
         ctx.fillStyle = hairBaseGradient;
         ctx.beginPath();
-        ctx.arc(0, -12, 25, 0, Math.PI * 2);
+        ctx.arc(0, hairCenterY, hairRadius, 0, Math.PI * 2);
         ctx.fill();
         
-        // Main hair mass with animated movement and individual strands
-        ctx.fillStyle = '#fff8e0';
-        for (let i = 0; i < 20; i++) {
-            const hairAngle = (i / 20) * Math.PI * 2;
-            const hairDist = 20 + Math.sin(i * 0.7) * 8;
-            const hairAnim = Math.sin((time || 0) * 0.8 + i * 0.3) * 2; // Subtle hair movement
-            const hairX = Math.cos(hairAngle) * (hairDist + hairAnim);
-            const hairY = -12 + Math.sin(hairAngle) * 12;
-            const hairSize = 7 + Math.sin(i * 0.5) * 4;
+        // Individual hair strands with realistic physics
+        for (let strand = 0; strand < 35; strand++) {
+            const strandAngle = (strand / 35) * Math.PI * 2;
+            const baseRadius = 26 + (strand % 7) * 2.5;
+            const waveOffset = Math.sin(t * 0.5 + strand * 0.15) * 5;
+            const strandX = Math.cos(strandAngle) * (baseRadius + waveOffset);
+            const strandY = hairCenterY + Math.sin(strandAngle) * (baseRadius + waveOffset);
+            const strandSize = 4.5 + Math.sin(t * 0.9 + strand) * 1.8;
+            
+            // Hair strand with realistic gradient
+            const strandGradient = ctx.createRadialGradient(strandX, strandY, 0, strandX, strandY, strandSize);
+            strandGradient.addColorStop(0, '#ffffff');
+            strandGradient.addColorStop(0.3, '#faf8f5');
+            strandGradient.addColorStop(0.7, '#f0e8e0');
+            strandGradient.addColorStop(1, '#e8d8d0');
+            ctx.fillStyle = strandGradient;
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
             ctx.beginPath();
-            ctx.arc(hairX, hairY, hairSize, 0, Math.PI * 2);
+            ctx.arc(strandX, strandY, strandSize, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+        
+        // Top hair spikes (signature Einstein look)
+        for (let spike = 0; spike < 7; spike++) {
+            const spikeX = -14 + spike * 4.5;
+            const spikeY = -42 + Math.sin(t * 0.4 + spike) * 2;
+            const spikeHeight = 12 + Math.sin(t * 0.6 + spike) * 4;
+            const spikeWidth = 3;
+            
+            const spikeGradient = ctx.createLinearGradient(spikeX, spikeY, spikeX, spikeY - spikeHeight);
+            spikeGradient.addColorStop(0, '#ffffff');
+            spikeGradient.addColorStop(0.3, '#faf8f5');
+            spikeGradient.addColorStop(1, '#f0e8e0');
+            ctx.fillStyle = spikeGradient;
+            ctx.beginPath();
+            ctx.moveTo(spikeX - spikeWidth, spikeY);
+            ctx.lineTo(spikeX, spikeY - spikeHeight);
+            ctx.lineTo(spikeX + spikeWidth, spikeY);
+            ctx.closePath();
             ctx.fill();
         }
         
-        // Additional hair texture and volume (highlights)
-        ctx.fillStyle = '#fff';
-        for (let i = 0; i < 15; i++) {
-            const hairAngle = (i / 15) * Math.PI * 2;
-            const hairDist = 22 + Math.sin(i) * 4;
-            const hairX = Math.cos(hairAngle) * hairDist;
-            const hairY = -12 + Math.sin(hairAngle) * 10;
-            const hairSize = 5 + Math.sin(i * 0.7) * 2;
-            ctx.beginPath();
-            ctx.arc(hairX, hairY, hairSize, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        
-        // Top hair spike (characteristic Einstein look) - enhanced
-        ctx.fillStyle = '#fffef8';
-        ctx.beginPath();
-        ctx.arc(0, -30, 10, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(-6, -32, 8, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(6, -32, 8, 0, Math.PI * 2);
-        ctx.fill();
-        // Additional spikes
-        ctx.beginPath();
-        ctx.arc(-3, -34, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(3, -34, 6, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // ========== EYEBROWS ==========
-        // Bushy eyebrows (more detailed)
-        ctx.fillStyle = '#fff8e0';
-        // Left eyebrow
-        ctx.beginPath();
-        ctx.ellipse(-7, -12, 6, 2.5, -0.2, 0, Math.PI * 2);
-        ctx.fill();
-        // Right eyebrow
-        ctx.beginPath();
-        ctx.ellipse(7, -12, 6, 2.5, 0.2, 0, Math.PI * 2);
-        ctx.fill();
-        // Eyebrow texture (individual hairs)
-        ctx.fillStyle = '#fff';
-        for (let i = 0; i < 5; i++) {
-            ctx.beginPath();
-            ctx.arc(-7 + i * 0.5, -12, 1, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(7 - i * 0.5, -12, 1, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        
-        // ========== EYES ==========
-        // Eyes - more expressive and characteristic
-        ctx.fillStyle = '#1a1a1a';
-        // Left eye
-        ctx.beginPath();
-        ctx.arc(-7, -8, 3, 0, Math.PI * 2);
-        ctx.fill();
-        // Right eye
-        ctx.beginPath();
-        ctx.arc(7, -8, 3, 0, Math.PI * 2);
-        ctx.fill();
-        // Eye highlights (more detailed)
-        ctx.fillStyle = '#fff';
-        ctx.beginPath();
-        ctx.arc(-6.5, -8.5, 1.2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(7.5, -8.5, 1.2, 0, Math.PI * 2);
-        ctx.fill();
-        // Secondary highlight
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-        ctx.beginPath();
-        ctx.arc(-6.2, -8.3, 0.6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(7.8, -8.3, 0.6, 0, Math.PI * 2);
-        ctx.fill();
-        // Eye wrinkles (crow's feet)
-        ctx.strokeStyle = 'rgba(200, 150, 100, 0.3)';
-        ctx.lineWidth = 1;
-        for (let i = 0; i < 3; i++) {
-            ctx.beginPath();
-            ctx.moveTo(-12 - i, -8);
-            ctx.lineTo(-10 - i * 0.5, -7 - i * 0.5);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(12 + i, -8);
-            ctx.lineTo(10 + i * 0.5, -7 - i * 0.5);
-            ctx.stroke();
-        }
-        
-        // ========== NOSE ==========
-        // Nose - more prominent with shading
-        ctx.strokeStyle = 'rgba(200, 150, 100, 0.4)';
+        // ========== FOREHEAD WRINKLES - Professional Detail ==========
+        ctx.strokeStyle = 'rgba(180, 140, 100, 0.7)';
         ctx.lineWidth = 2;
+        for (let i = 0; i < 7; i++) {
+            const wrinkleY = -22 + i * 2.8;
+            const wrinkleCurve = Math.sin(i * 0.35) * 3.5;
+            ctx.beginPath();
+            ctx.moveTo(-16 + wrinkleCurve, wrinkleY);
+            ctx.quadraticCurveTo(0, wrinkleY - 2, 16 - wrinkleCurve, wrinkleY);
+            ctx.stroke();
+        }
+        
+        // Side wrinkles (crow's feet)
+        for (let i = 0; i < 5; i++) {
+            const wrinkleX = -20 + i * 1.8;
+            ctx.beginPath();
+            ctx.moveTo(wrinkleX, -24 + i * 1.3);
+            ctx.lineTo(wrinkleX - 2, -22 + i * 1.3);
+            ctx.stroke();
+        }
+        for (let i = 0; i < 5; i++) {
+            const wrinkleX = 20 - i * 1.8;
+            ctx.beginPath();
+            ctx.moveTo(wrinkleX, -24 + i * 1.3);
+            ctx.lineTo(wrinkleX + 2, -22 + i * 1.3);
+            ctx.stroke();
+        }
+        
+        // ========== EYES - Professional Realistic Eyes ==========
+        const eyeY = -10;
+        
+        // Eye sockets with realistic depth
+        ctx.fillStyle = 'rgba(200, 150, 100, 0.5)';
+        ctx.beginPath();
+        ctx.ellipse(-10, eyeY, 8, 6, -0.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(10, eyeY, 8, 6, 0.2, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Realistic blinking
+        const blinkCycle = Math.sin(t * 0.15);
+        const eyeBlink = blinkCycle < -0.92 ? 0.15 : 1.0;
+        
+        // Left eye
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.ellipse(-10, eyeY, 7, 5 * eyeBlink, -0.2, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Iris with realistic brown color and depth
+        const leftIrisGradient = ctx.createRadialGradient(-10, eyeY, 0, -10, eyeY, 3.5);
+        leftIrisGradient.addColorStop(0, '#8b6f47'); // Light brown center
+        leftIrisGradient.addColorStop(0.4, '#6b4e37');
+        leftIrisGradient.addColorStop(0.7, '#5a3d28');
+        leftIrisGradient.addColorStop(1, '#4a2d18');
+        ctx.fillStyle = leftIrisGradient;
+        ctx.beginPath();
+        ctx.arc(-10, eyeY, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Pupil
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(-10, eyeY, 1.8, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Eye highlight (realistic reflection)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        ctx.beginPath();
+        ctx.arc(-9.2, eyeY - 0.8, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Right eye
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.ellipse(10, eyeY, 7, 5 * eyeBlink, 0.2, 0, Math.PI * 2);
+        ctx.fill();
+        
+        const rightIrisGradient = ctx.createRadialGradient(10, eyeY, 0, 10, eyeY, 3.5);
+        rightIrisGradient.addColorStop(0, '#8b6f47');
+        rightIrisGradient.addColorStop(0.4, '#6b4e37');
+        rightIrisGradient.addColorStop(0.7, '#5a3d28');
+        rightIrisGradient.addColorStop(1, '#4a2d18');
+        ctx.fillStyle = rightIrisGradient;
+        ctx.beginPath();
+        ctx.arc(10, eyeY, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(10, eyeY, 1.8, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        ctx.beginPath();
+        ctx.arc(10.8, eyeY - 0.8, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Eye bags (realistic age detail)
+        ctx.fillStyle = 'rgba(180, 140, 100, 0.6)';
+        ctx.beginPath();
+        ctx.ellipse(-10, eyeY + 3, 7, 3, -0.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(10, eyeY + 3, 7, 3, 0.2, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // ========== NOSE - Professional Structure ==========
+        ctx.strokeStyle = 'rgba(200, 150, 100, 0.7)';
+        ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.moveTo(0, -6);
-        ctx.lineTo(0, 2);
+        ctx.quadraticCurveTo(0, -1, 0, 4);
         ctx.stroke();
-        // Nose shadow
-        ctx.fillStyle = 'rgba(200, 150, 100, 0.3)';
+        
+        // Nose shadow (realistic depth)
+        const noseShadow = ctx.createRadialGradient(-3, 1, 0, -3, 1, 5);
+        noseShadow.addColorStop(0, 'rgba(200, 150, 100, 0.5)');
+        noseShadow.addColorStop(1, 'rgba(200, 150, 100, 0)');
+        ctx.fillStyle = noseShadow;
         ctx.beginPath();
-        ctx.ellipse(-1, 0, 2, 3, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // Nostrils (more detailed)
-        ctx.fillStyle = 'rgba(180, 130, 90, 0.5)';
-        ctx.beginPath();
-        ctx.arc(-2.5, 1, 2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(2.5, 1, 2, 0, Math.PI * 2);
-        ctx.fill();
-        // Nostril highlights
-        ctx.fillStyle = 'rgba(200, 150, 100, 0.3)';
-        ctx.beginPath();
-        ctx.arc(-2.2, 0.8, 0.8, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(2.8, 0.8, 0.8, 0, Math.PI * 2);
+        ctx.ellipse(-1.5, 1, 3.5, 5, 0, 0, Math.PI * 2);
         ctx.fill();
         
-        // ========== MUSTACHE ==========
-        // Prominent bushy mustache (Einstein's most recognizable feature) - enhanced
-        // Base mustache
-        const mustacheGradient = ctx.createLinearGradient(-14, 0, 14, 0);
-        mustacheGradient.addColorStop(0, '#fffef8');
-        mustacheGradient.addColorStop(0.5, '#fff8e0');
-        mustacheGradient.addColorStop(1, '#fffef8');
+        // Nostrils (realistic)
+        ctx.fillStyle = 'rgba(150, 100, 80, 0.7)';
+        ctx.beginPath();
+        ctx.arc(-3.5, 3, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(3.5, 3, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // ========== MUSTACHE - Professional Bushy Mustache ==========
+        const mustacheY = 6;
+        
+        // Mustache base (large and bushy)
+        const mustacheGradient = ctx.createLinearGradient(-22, mustacheY, 22, mustacheY);
+        mustacheGradient.addColorStop(0, '#faf8f5');
+        mustacheGradient.addColorStop(0.15, '#ffffff');
+        mustacheGradient.addColorStop(0.5, '#ffffff');
+        mustacheGradient.addColorStop(0.85, '#ffffff');
+        mustacheGradient.addColorStop(1, '#faf8f5');
         ctx.fillStyle = mustacheGradient;
         ctx.beginPath();
-        ctx.ellipse(0, 0, 16, 7, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, mustacheY, 22, 13, 0, 0, Math.PI * 2);
         ctx.fill();
         
-        // Mustache texture - individual hairs (more detailed)
-        ctx.fillStyle = '#fff';
-        for (let i = 0; i < 12; i++) {
-            const mustacheX = -12 + (i * 2);
-            const mustacheY = -1 + Math.sin(i * 0.5) * 1.5;
-            const hairSize = 2.5 + Math.sin(i) * 0.5;
+        // Individual mustache hairs (realistic texture)
+        for (let i = 0; i < 30; i++) {
+            const mustacheX = -18 + (i * 1.2);
+            const mustacheYOffset = mustacheY + Math.sin(t * 0.25 + i * 0.12) * 2;
+            const hairSize = 3.5 + Math.sin(t * 0.4 + i) * 1.2;
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.shadowBlur = 5;
+            ctx.shadowColor = 'rgba(255, 255, 255, 0.6)';
             ctx.beginPath();
-            ctx.arc(mustacheX, mustacheY, hairSize, 0, Math.PI * 2);
+            ctx.arc(mustacheX, mustacheYOffset, hairSize, 0, Math.PI * 2);
             ctx.fill();
         }
-        // Additional mustache volume
-        ctx.fillStyle = '#fff8e0';
-        for (let i = 0; i < 8; i++) {
-            const mustacheX = -10 + (i * 2.5);
-            const mustacheY = 0.5 + Math.sin(i * 0.7) * 1;
-            ctx.beginPath();
-            ctx.arc(mustacheX, mustacheY, 2, 0, Math.PI * 2);
-            ctx.fill();
-        }
+        ctx.shadowBlur = 0;
         
-        // Mustache extends down (more detailed)
-        ctx.fillStyle = '#fff8e0';
+        // Mustache highlights (realistic lighting)
+        ctx.fillStyle = '#fffef8';
         ctx.beginPath();
-        ctx.ellipse(-7, 3, 5, 4, -0.3, 0, Math.PI * 2);
+        ctx.ellipse(-8, mustacheY - 1, 8, 6, -0.3, 0, Math.PI * 2);
         ctx.fill();
         ctx.beginPath();
-        ctx.ellipse(7, 3, 5, 4, 0.3, 0, Math.PI * 2);
+        ctx.ellipse(8, mustacheY - 1, 8, 6, 0.3, 0, Math.PI * 2);
         ctx.fill();
-        // Mustache side texture
-        for (let i = 0; i < 4; i++) {
-            ctx.beginPath();
-            ctx.arc(-8 + i * 0.5, 4, 1.5, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(8 - i * 0.5, 4, 1.5, 0, Math.PI * 2);
-            ctx.fill();
-        }
         
-        // ========== MOUTH ==========
-        // Mouth (visible under mustache)
-        ctx.strokeStyle = 'rgba(150, 100, 80, 0.5)';
-        ctx.lineWidth = 1.5;
+        // ========== MOUTH - Professional Expression ==========
+        ctx.strokeStyle = 'rgba(150, 100, 80, 0.8)';
+        ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.arc(0, 1, 3, 0, Math.PI);
+        ctx.arc(0, 8, 6, 0, Math.PI);
         ctx.stroke();
         
-        // ========== BODY (SWEATER) ==========
-        // Enhanced sweater with texture (Einstein's typical casual wear)
-        const bodyGradient = ctx.createLinearGradient(-12, 2, -12, 28);
-        bodyGradient.addColorStop(0, '#a59575');
-        bodyGradient.addColorStop(0.3, '#9b8565');
-        bodyGradient.addColorStop(0.6, '#8b7355');
-        bodyGradient.addColorStop(1, '#6b5a45');
+        // Mouth interior
+        ctx.fillStyle = 'rgba(200, 150, 100, 0.5)';
+        ctx.beginPath();
+        ctx.ellipse(0, 8, 5, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // ========== BODY - Professional Sweater ==========
+        const bodyY = 8;
+        const bodyHeight = 38;
+        
+        // Sweater base with realistic fabric
+        const bodyGradient = ctx.createLinearGradient(-18, bodyY, -18, bodyY + bodyHeight);
+        bodyGradient.addColorStop(0, '#8a7b6f'); // Lighter top
+        bodyGradient.addColorStop(0.25, '#7a6b5f');
+        bodyGradient.addColorStop(0.5, '#6b5b4f');
+        bodyGradient.addColorStop(0.75, '#5a4a3e');
+        bodyGradient.addColorStop(1, '#4a3a2e'); // Darker bottom
         ctx.fillStyle = bodyGradient;
-        ctx.fillRect(-12, 2, 24, 28);
+        ctx.fillRect(-18, bodyY, 36, bodyHeight);
         
-        // Sweater texture/pattern (knit pattern)
-        ctx.strokeStyle = 'rgba(107, 90, 69, 0.4)';
+        // Sweater texture (realistic knit pattern)
+        ctx.strokeStyle = 'rgba(107, 91, 79, 0.6)';
         ctx.lineWidth = 1.5;
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < 7; i++) {
+            const textureY = bodyY + 2 + i * 5.5;
             ctx.beginPath();
-            ctx.moveTo(-12, 6 + i * 6);
-            ctx.lineTo(12, 6 + i * 6);
+            ctx.moveTo(-18, textureY);
+            ctx.lineTo(18, textureY);
             ctx.stroke();
         }
-        // Vertical knit lines
-        ctx.strokeStyle = 'rgba(107, 90, 69, 0.2)';
-        ctx.lineWidth = 1;
-        for (let i = 0; i < 6; i++) {
-            ctx.beginPath();
-            ctx.moveTo(-10 + i * 4, 2);
-            ctx.lineTo(-10 + i * 4, 28);
-            ctx.stroke();
-        }
-        // Sweater shadow
-        ctx.fillStyle = 'rgba(50, 40, 30, 0.2)';
-        ctx.fillRect(-12, 2, 24, 5);
         
-        // ========== ARMS ==========
-        // Enhanced arms with sleeves
-        const armGradient = ctx.createLinearGradient(-14, 5, -14, 25);
-        armGradient.addColorStop(0, '#ffcc66');
-        armGradient.addColorStop(0.5, '#ffaa44');
-        armGradient.addColorStop(1, '#ff8844');
+        // Vertical texture lines
+        for (let i = 0; i < 9; i++) {
+            const textureX = -16 + i * 4;
+            ctx.beginPath();
+            ctx.moveTo(textureX, bodyY);
+            ctx.lineTo(textureX, bodyY + bodyHeight);
+            ctx.stroke();
+        }
+        
+        // Sweater collar
+        ctx.fillStyle = 'rgba(50, 40, 30, 0.5)';
+        ctx.fillRect(-18, bodyY, 36, 8);
+        
+        // Sweater highlight (realistic lighting)
+        const sweaterHighlight = ctx.createLinearGradient(-18, bodyY, -18, bodyY + 22);
+        sweaterHighlight.addColorStop(0, 'rgba(160, 150, 140, 0.4)');
+        sweaterHighlight.addColorStop(1, 'rgba(160, 150, 140, 0)');
+        ctx.fillStyle = sweaterHighlight;
+        ctx.fillRect(-16, bodyY, 32, 22);
+        
+        // ========== ARMS - Professional Proportions ==========
+        const armGradient = ctx.createLinearGradient(-20, bodyY + 2, -20, bodyY + 32);
+        armGradient.addColorStop(0, '#8a7b6f');
+        armGradient.addColorStop(1, '#4a3a2e');
         ctx.fillStyle = armGradient;
+        
         // Left arm
-        ctx.fillRect(-14, 5, 10, 20);
+        ctx.fillRect(-20, bodyY + 2, 16, 32);
         // Right arm
-        ctx.fillRect(4, 5, 10, 20);
-        // Arm highlights
-        ctx.fillStyle = 'rgba(255, 200, 150, 0.3)';
-        ctx.fillRect(-12, 5, 6, 20);
-        ctx.fillRect(6, 5, 6, 20);
-        // Arm shadows
-        ctx.fillStyle = 'rgba(200, 120, 60, 0.3)';
-        ctx.fillRect(-10, 5, 4, 20);
-        ctx.fillRect(8, 5, 4, 20);
+        ctx.fillRect(4, bodyY + 2, 16, 32);
         
-        // Sleeve cuffs (more detailed)
-        const cuffGradient = ctx.createLinearGradient(-14, 23, -14, 25);
-        cuffGradient.addColorStop(0, '#8b7355');
-        cuffGradient.addColorStop(1, '#6b5a45');
-        ctx.fillStyle = cuffGradient;
-        ctx.fillRect(-14, 23, 10, 3);
-        ctx.fillRect(4, 23, 10, 3);
-        // Cuff detail
-        ctx.strokeStyle = '#5a4a35';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(-14, 24);
-        ctx.lineTo(-4, 24);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(4, 24);
-        ctx.lineTo(14, 24);
-        ctx.stroke();
+        // Arm shadows (realistic depth)
+        ctx.fillStyle = 'rgba(50, 40, 30, 0.6)';
+        ctx.fillRect(-18, bodyY + 2, 12, 32);
+        ctx.fillRect(6, bodyY + 2, 12, 32);
         
-        // ========== HANDS ==========
-        // Enhanced hands with detailed fingers
-        const handGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 8);
-        handGradient.addColorStop(0, '#ffcc66');
-        handGradient.addColorStop(1, '#ffaa44');
-        ctx.fillStyle = handGradient;
+        // ========== HANDS - Professional Detail ==========
+        const handGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 11);
+        handGradient.addColorStop(0, '#faf0e6');
+        handGradient.addColorStop(1, '#d8c0a0');
         
         // Left hand
         ctx.save();
-        ctx.translate(-12, 25);
-        ctx.beginPath();
-        ctx.arc(0, 0, 7, 0, Math.PI * 2);
-        ctx.fill();
-        // Left hand shadow
-        ctx.fillStyle = 'rgba(200, 120, 60, 0.4)';
-        ctx.beginPath();
-        ctx.arc(1, 1, 7, 0, Math.PI * 2);
-        ctx.fill();
-        // Left hand fingers (more detailed)
+        ctx.translate(-16, bodyY + 36);
         ctx.fillStyle = handGradient;
+        ctx.beginPath();
+        ctx.arc(0, 0, 10, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Fingers (realistic)
         for (let i = 0; i < 4; i++) {
-            const fingerX = -4 + i * 2.5;
-            const fingerY = -2;
+            const fingerX = -6 + i * 3.5;
+            const fingerY = -4 - i * 0.7;
             ctx.beginPath();
-            ctx.arc(fingerX, fingerY, 2.5, 0, Math.PI * 2);
+            ctx.arc(fingerX, fingerY, 3.5, 0, Math.PI * 2);
             ctx.fill();
-            // Finger shadow
-            ctx.fillStyle = 'rgba(200, 120, 60, 0.3)';
-            ctx.beginPath();
-            ctx.arc(fingerX + 0.5, fingerY + 0.5, 2.5, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.fillStyle = handGradient;
         }
         ctx.restore();
         
         // Right hand
         ctx.save();
-        ctx.translate(12, 25);
-        ctx.beginPath();
-        ctx.arc(0, 0, 7, 0, Math.PI * 2);
-        ctx.fill();
-        // Right hand shadow
-        ctx.fillStyle = 'rgba(200, 120, 60, 0.4)';
-        ctx.beginPath();
-        ctx.arc(1, 1, 7, 0, Math.PI * 2);
-        ctx.fill();
-        // Right hand fingers (more detailed)
+        ctx.translate(16, bodyY + 36);
         ctx.fillStyle = handGradient;
+        ctx.beginPath();
+        ctx.arc(0, 0, 10, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Fingers
         for (let i = 0; i < 4; i++) {
-            const fingerX = -4 + i * 2.5;
-            const fingerY = -2;
+            const fingerX = 6 - i * 3.5;
+            const fingerY = -4 - i * 0.7;
             ctx.beginPath();
-            ctx.arc(fingerX, fingerY, 2.5, 0, Math.PI * 2);
+            ctx.arc(fingerX, fingerY, 3.5, 0, Math.PI * 2);
             ctx.fill();
-            // Finger shadow
-            ctx.fillStyle = 'rgba(200, 120, 60, 0.3)';
-            ctx.beginPath();
-            ctx.arc(fingerX + 0.5, fingerY + 0.5, 2.5, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.fillStyle = handGradient;
         }
         ctx.restore();
         
+        // Reset shadow
         ctx.shadowBlur = 0;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
         ctx.restore();
     }
-    
-    // Helper function to draw Einstein's ship (spacecraft he uses to navigate Bell's mind)
+        // Helper function to draw Einstein's ship (spacecraft he uses to navigate Bell's mind)
     drawEinsteinShip(ctx, x, y, scale = 1, alpha = 1, time = 0) {
         ctx.save();
         ctx.globalAlpha = alpha;
         ctx.translate(x, y);
         ctx.scale(scale, scale);
         
-        const shipWidth = 120;
-        const shipHeight = 80;
+        const t = time || 0;
+        const shipWidth = 140;
+        const shipHeight = 95;
         
-        // Ship shadow
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-        ctx.shadowBlur = 20;
-        ctx.shadowOffsetX = 5;
-        ctx.shadowOffsetY = 5;
+        // Enhanced shadow with multiple layers
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+        ctx.shadowBlur = 40;
+        ctx.shadowOffsetX = 10;
+        ctx.shadowOffsetY = 10;
         
-        // Main ship body (futuristic but with Einstein's style - slightly retro)
+        // ========== MAIN SHIP BODY - Enhanced ==========
         const shipGradient = ctx.createLinearGradient(-shipWidth/2, -shipHeight/2, -shipWidth/2, shipHeight/2);
-        shipGradient.addColorStop(0, '#4a6b8a');
-        shipGradient.addColorStop(0.3, '#3a5a7a');
-        shipGradient.addColorStop(0.7, '#2a4a6a');
-        shipGradient.addColorStop(1, '#1a3a5a');
+        shipGradient.addColorStop(0, '#5a7b9a'); // Lighter top
+        shipGradient.addColorStop(0.2, '#4a6b8a');
+        shipGradient.addColorStop(0.5, '#3a5a7a');
+        shipGradient.addColorStop(0.8, '#2a4a6a');
+        shipGradient.addColorStop(1, '#1a3a5a'); // Darker bottom
         ctx.fillStyle = shipGradient;
-        
-        // Ship body shape (rounded, aerodynamic)
         ctx.beginPath();
         ctx.ellipse(0, 0, shipWidth/2, shipHeight/2, 0, 0, Math.PI * 2);
         ctx.fill();
         
-        // Ship cockpit (transparent, showing Einstein inside)
-        ctx.fillStyle = 'rgba(79, 195, 247, 0.3)';
-        ctx.strokeStyle = 'rgba(79, 195, 247, 0.8)';
-        ctx.lineWidth = 3;
+        // Body highlight (animated lighting)
+        const lightPulse = 0.3 + Math.sin(t * 1.5) * 0.2;
+        const bodyHighlight = ctx.createRadialGradient(-shipWidth/4, -shipHeight/3, 0, -shipWidth/4, -shipHeight/3, shipWidth/2);
+        bodyHighlight.addColorStop(0, `rgba(79, 195, 247, ${0.4 * lightPulse})`);
+        bodyHighlight.addColorStop(0.5, `rgba(79, 195, 247, ${0.2 * lightPulse})`);
+        bodyHighlight.addColorStop(1, 'rgba(79, 195, 247, 0)');
+        ctx.fillStyle = bodyHighlight;
         ctx.beginPath();
-        ctx.ellipse(0, -10, shipWidth/3, shipHeight/3, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, 0, shipWidth/2, shipHeight/2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Panel lines (structural detail, animated)
+        ctx.strokeStyle = `rgba(79, 195, 247, ${0.5 * lightPulse})`;
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 4; i++) {
+            const panelY = -shipHeight/3 + i * (shipHeight/3);
+            const panelPulse = Math.sin(t * 2 + i) * 0.3 + 0.7;
+            ctx.globalAlpha = alpha * panelPulse;
+            ctx.beginPath();
+            ctx.ellipse(0, panelY, shipWidth/2.2, 2, 0, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        ctx.globalAlpha = alpha;
+        
+        // ========== ENHANCED COCKPIT - With New Einstein ==========
+        // Cockpit base with animated glow
+        const cockpitPulse = 0.4 + Math.sin(t * 1.2) * 0.3;
+        const cockpitGradient = ctx.createRadialGradient(0, -12, 0, 0, -12, shipWidth/2.5);
+        cockpitGradient.addColorStop(0, `rgba(79, 195, 247, ${0.5 * cockpitPulse})`);
+        cockpitGradient.addColorStop(0.5, `rgba(79, 195, 247, ${0.25 * cockpitPulse})`);
+        cockpitGradient.addColorStop(1, 'rgba(79, 195, 247, 0)');
+        ctx.fillStyle = cockpitGradient;
+        ctx.beginPath();
+        ctx.ellipse(0, -12, shipWidth/2.8, shipHeight/2.8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Cockpit glass (enhanced transparency)
+        ctx.fillStyle = 'rgba(79, 195, 247, 0.3)';
+        ctx.strokeStyle = `rgba(79, 195, 247, ${0.95 * cockpitPulse})`;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.ellipse(0, -12, shipWidth/3, shipHeight/3, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
         
-        // Ship details - control panels and lights
-        for (let i = 0; i < 6; i++) {
-            const lightX = -shipWidth/3 + (i * shipWidth/7.5);
+        // Glass reflection (animated)
+        const glassHighlight = ctx.createLinearGradient(-shipWidth/6, -shipHeight/3, shipWidth/6, -shipHeight/6);
+        glassHighlight.addColorStop(0, `rgba(255, 255, 255, ${0.4 * cockpitPulse})`);
+        glassHighlight.addColorStop(0.5, `rgba(79, 195, 247, ${0.3 * cockpitPulse})`);
+        glassHighlight.addColorStop(1, 'rgba(79, 195, 247, 0)');
+        ctx.fillStyle = glassHighlight;
+        ctx.beginPath();
+        ctx.ellipse(0, -12, shipWidth/3.2, shipHeight/3.2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // NEW EINSTEIN inside cockpit (enhanced visibility and animation)
+        ctx.save();
+        ctx.translate(0, -10);
+        ctx.scale(0.4, 0.4); // Slightly larger for better visibility
+        ctx.globalAlpha = 0.85; // More visible
+        // Enhanced cockpit animation
+        const cockpitFloat = Math.sin(t * 0.6) * 1.5;
+        const cockpitSway = Math.sin(t * 0.3) * 0.5;
+        ctx.translate(cockpitSway, cockpitFloat);
+        this.drawEinsteinCharacter(ctx, 0, 0, 1, 1.0, t);
+        ctx.restore();
+        
+        // ========== ENHANCED CONTROL PANELS - More Lights ==========
+        // Main control panel (front, animated)
+        ctx.fillStyle = 'rgba(20, 30, 40, 0.9)';
+        ctx.fillRect(-shipWidth/3, shipHeight/5, shipWidth * 0.67, 14);
+        
+        // Enhanced control panel lights (more, animated)
+        for (let i = 0; i < 10; i++) {
+            const lightX = -shipWidth/3 + (i * shipWidth/9);
             const lightY = shipHeight/4;
-            const glow = 0.4 + Math.sin(time * 2 + i) * 0.3;
-            this.drawGlow(ctx, lightX, lightY, 4, `rgba(79, 195, 247, ${glow})`);
+            const glow = 0.6 + Math.sin(t * 3 + i * 0.6) * 0.35;
+            const colorPhase = (i % 4);
+            let lightColor;
+            if (colorPhase === 0) {
+                lightColor = `rgba(79, 195, 247, ${glow})`; // Blue
+            } else if (colorPhase === 1) {
+                lightColor = `rgba(156, 39, 176, ${glow * 0.9})`; // Purple
+            } else if (colorPhase === 2) {
+                lightColor = `rgba(33, 150, 243, ${glow})`; // Dark blue
+            } else {
+                lightColor = `rgba(102, 255, 153, ${glow * 0.8})`; // Green
+            }
+            this.drawGlow(ctx, lightX, lightY, 6, lightColor);
         }
         
-        // Ship engines/thrusters (glowing)
-        const thrusterY = shipHeight/2 + 5;
+        // Side panel lights (enhanced)
+        for (let side = 0; side < 2; side++) {
+            const sideX = side === 0 ? -shipWidth/2.3 : shipWidth/2.3;
+            for (let i = 0; i < 5; i++) {
+                const lightY = -shipHeight/4 + i * (shipHeight/8);
+                const glow = 0.5 + Math.sin(t * 2.5 + i + side) * 0.35;
+                this.drawGlow(ctx, sideX, lightY, 4, `rgba(79, 195, 247, ${glow})`);
+            }
+        }
+        
+        // ========== QUANTUM ENERGY EFFECTS - New Feature ==========
+        // Quantum energy rings around ship (animated)
+        for (let ring = 0; ring < 3; ring++) {
+            const ringRadius = shipWidth/2.1 + ring * 10 + Math.sin(t * 1.8 + ring) * 5;
+            const ringAlpha = (0.5 - ring * 0.15) * (0.7 + Math.sin(t * 2.5) * 0.3);
+            ctx.strokeStyle = `rgba(79, 195, 247, ${ringAlpha})`;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(0, 0, ringRadius, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        
+        // Quantum particles orbiting ship (new feature)
+        for (let i = 0; i < 16; i++) {
+            const angle = t * 1.0 + i * (Math.PI * 2 / 16);
+            const radius = shipWidth/2.4 + 8;
+            const particleX = Math.cos(angle) * radius;
+            const particleY = Math.sin(angle) * radius;
+            const pulse = Math.sin(t * 4 + i) * 0.4 + 0.6;
+            
+            ctx.fillStyle = `rgba(79, 195, 247, ${0.8 * pulse})`;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.9)';
+            ctx.beginPath();
+            ctx.arc(particleX, particleY, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+        
+        // ========== ENHANCED ENGINES/THRUSTERS - More Effects ==========
+        const thrusterY = shipHeight/2 + 10;
         for (let i = 0; i < 2; i++) {
             const thrusterX = -shipWidth/4 + i * (shipWidth/2);
-            const thrusterGlow = 0.6 + Math.sin(time * 3 + i * Math.PI) * 0.4;
-            ctx.fillStyle = `rgba(255, 170, 68, ${thrusterGlow})`;
+            
+            // Thruster base (enhanced)
+            ctx.fillStyle = '#2a3a4a';
             ctx.beginPath();
-            ctx.arc(thrusterX, thrusterY, 8, 0, Math.PI * 2);
+            ctx.ellipse(thrusterX, thrusterY, 12, 8, 0, 0, Math.PI * 2);
             ctx.fill();
-            // Thruster flame
-            ctx.fillStyle = `rgba(255, 100, 0, ${thrusterGlow * 0.7})`;
+            
+            // Thruster glow (enhanced pulsing)
+            const thrusterGlow = 0.8 + Math.sin(t * 5 + i * Math.PI) * 0.2;
+            const thrusterGradient = ctx.createRadialGradient(thrusterX, thrusterY, 0, thrusterX, thrusterY, 18);
+            thrusterGradient.addColorStop(0, `rgba(255, 220, 120, ${thrusterGlow})`);
+            thrusterGradient.addColorStop(0.4, `rgba(255, 180, 70, ${thrusterGlow * 0.9})`);
+            thrusterGradient.addColorStop(0.7, `rgba(255, 140, 40, ${thrusterGlow * 0.7})`);
+            thrusterGradient.addColorStop(1, `rgba(255, 100, 0, 0)`);
+            ctx.fillStyle = thrusterGradient;
             ctx.beginPath();
-            ctx.arc(thrusterX, thrusterY + 12, 12, 0, Math.PI * 2);
+            ctx.arc(thrusterX, thrusterY, 15, 0, Math.PI * 2);
             ctx.fill();
+            
+            // Enhanced thruster flame (multi-layer, animated)
+            for (let layer = 0; layer < 4; layer++) {
+                const flameY = thrusterY + 10 + layer * 8;
+                const flameSize = 14 - layer * 2.5 + Math.sin(t * 6 + layer) * 3;
+                const flameAlpha = (0.9 - layer * 0.2) * thrusterGlow;
+                
+                const flameGradient = ctx.createRadialGradient(thrusterX, flameY, 0, thrusterX, flameY, flameSize);
+                if (layer === 0) {
+                    flameGradient.addColorStop(0, `rgba(255, 255, 200, ${flameAlpha})`);
+                    flameGradient.addColorStop(0.4, `rgba(255, 220, 120, ${flameAlpha * 0.9})`);
+                    flameGradient.addColorStop(1, `rgba(255, 180, 70, 0)`);
+                } else if (layer === 1) {
+                    flameGradient.addColorStop(0, `rgba(255, 220, 120, ${flameAlpha})`);
+                    flameGradient.addColorStop(0.5, `rgba(255, 180, 70, ${flameAlpha * 0.9})`);
+                    flameGradient.addColorStop(1, `rgba(255, 140, 40, 0)`);
+                } else if (layer === 2) {
+                    flameGradient.addColorStop(0, `rgba(255, 180, 70, ${flameAlpha})`);
+                    flameGradient.addColorStop(1, `rgba(255, 140, 40, 0)`);
+                } else {
+                    flameGradient.addColorStop(0, `rgba(255, 140, 40, ${flameAlpha})`);
+                    flameGradient.addColorStop(1, `rgba(255, 100, 0, 0)`);
+                }
+                ctx.fillStyle = flameGradient;
+                ctx.beginPath();
+                ctx.ellipse(thrusterX, flameY, flameSize * 0.6, flameSize, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // Thruster particles/sparks (new feature)
+            for (let p = 0; p < 8; p++) {
+                const particleAngle = (t * 3 + p * 0.6) % (Math.PI * 2);
+                const particleDist = 18 + (t * 12 + p) % 15;
+                const particleX = thrusterX + Math.cos(particleAngle) * particleDist;
+                const particleY = thrusterY + 12 + Math.sin(particleAngle) * particleDist;
+                const particleSize = 2;
+                const particleAlpha = 0.9 - (particleDist / 35);
+                
+                ctx.fillStyle = `rgba(255, 220, 120, ${particleAlpha})`;
+                ctx.shadowBlur = 6;
+                ctx.shadowColor = 'rgba(255, 220, 120, 0.9)';
+                ctx.beginPath();
+                ctx.arc(particleX, particleY, particleSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.shadowBlur = 0;
         }
         
-        // Ship wings/fins
-        ctx.fillStyle = '#2a4a6a';
-        // Left wing
+        // ========== ENHANCED WINGS/FINS ==========
+        const wingGradient = ctx.createLinearGradient(-shipWidth/2, 0, -shipWidth/2 - 28, 0);
+        wingGradient.addColorStop(0, '#3a5a7a');
+        wingGradient.addColorStop(1, '#2a4a6a');
+        ctx.fillStyle = wingGradient;
+        
+        // Left wing (enhanced)
         ctx.beginPath();
         ctx.moveTo(-shipWidth/2, 0);
-        ctx.lineTo(-shipWidth/2 - 15, shipHeight/3);
-        ctx.lineTo(-shipWidth/3, shipHeight/4);
+        ctx.lineTo(-shipWidth/2 - 28, 18);
+        ctx.lineTo(-shipWidth/2 - 18, 30);
+        ctx.lineTo(-shipWidth/2, 24);
         ctx.closePath();
         ctx.fill();
+        
         // Right wing
         ctx.beginPath();
         ctx.moveTo(shipWidth/2, 0);
-        ctx.lineTo(shipWidth/2 + 15, shipHeight/3);
-        ctx.lineTo(shipWidth/3, shipHeight/4);
+        ctx.lineTo(shipWidth/2 + 28, 18);
+        ctx.lineTo(shipWidth/2 + 18, 30);
+        ctx.lineTo(shipWidth/2, 24);
         ctx.closePath();
         ctx.fill();
         
-        // Einstein inside the cockpit (smaller scale) with animation
-        ctx.save();
-        ctx.translate(0, -10);
-        ctx.scale(0.4, 0.4);
-        this.drawEinsteinCharacter(ctx, 0, 0, 1, 0.9, time);
-        ctx.restore();
+        // Wing highlights (animated)
+        ctx.strokeStyle = `rgba(79, 195, 247, ${0.7 * lightPulse})`;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(-shipWidth/2, 5);
+        ctx.lineTo(-shipWidth/2 - 24, 20);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(shipWidth/2, 5);
+        ctx.lineTo(shipWidth/2 + 24, 20);
+        ctx.stroke();
         
-        // Ship glow effect
-        this.drawGlow(ctx, 0, 0, shipWidth/2, 'rgba(79, 195, 247, 0.2)');
+        // ========== SHIP DETAILS - Rivets, Panels ==========
+        // Rivets/bolts (animated glow)
+        ctx.fillStyle = `rgba(100, 120, 140, ${0.7 * lightPulse})`;
+        for (let i = 0; i < 10; i++) {
+            const rivetAngle = (i / 10) * Math.PI * 2;
+            const rivetRadius = shipWidth/2.6;
+            const rivetX = Math.cos(rivetAngle) * rivetRadius;
+            const rivetY = Math.sin(rivetAngle) * rivetRadius;
+            ctx.beginPath();
+            ctx.arc(rivetX, rivetY, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
         
+        // Ship name/identifier (animated)
+        const namePulse = 0.6 + Math.sin(t * 2) * 0.3;
+        ctx.fillStyle = `rgba(79, 195, 247, ${0.6 * namePulse})`;
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('E=mc²', 0, shipHeight/2 + 24);
+        
+        // Enhanced ship glow effect (animated)
+        const shipGlowPulse = 0.3 + Math.sin(t * 1.5) * 0.2;
+        this.drawGlow(ctx, 0, 0, shipWidth/1.8, `rgba(79, 195, 247, ${0.3 * shipGlowPulse})`);
+        
+        // Reset shadow
         ctx.shadowBlur = 0;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
@@ -27627,7 +31438,9 @@ class SpaceShooterGame {
         ctx.fillRect(0, 0, w, h);
         
         // Route to appropriate cutscene based on ID
-        if (this.cutsceneId === 'intro') {
+        if (this.cutsceneId === 'willsWayIntro') {
+            this.drawWillsWayIntroCutscene(ctx, w, h);
+        } else if (this.cutsceneId === 'intro') {
             this.drawIntroCutscene(ctx, w, h);
         } else if (this.cutsceneId === 'opening') {
             this.drawOpeningCutscene(ctx, w, h);
@@ -27645,42 +31458,1732 @@ class SpaceShooterGame {
         ctx.restore();
     }
     
-    // Intro cutscene: fast overview before the opening story
-    drawIntroCutscene(ctx, w, h) {
-        // Reset transform/blending to avoid inherited alpha flicker (fullscreen safety)
+    drawWillsWayIntroCutscene(ctx, w, h) {
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.globalAlpha = 1;
         ctx.globalCompositeOperation = 'source-over';
-        // background stars (stable alpha to prevent fullscreen flicker)
-        ctx.save();
-        ctx.fillStyle = '#000';
-        ctx.globalAlpha = 1;
-        ctx.fillRect(0, 0, w, h);
-        ctx.fillStyle = 'rgba(79,195,247,0.6)'; // slightly dimmer base
-        ctx.globalAlpha = 0.9; // fixed alpha
-        for (let i = 0; i < 160; i++) {
-            const x = (i * 89 + Math.sin(this.cutsceneTime * 0.6 + i) * 50) % w;
-            const y = (i * 57 + Math.cos(this.cutsceneTime * 0.7 + i) * 40) % h;
-            const s = 1 + (i % 3) * 0.6;
-            ctx.fillRect(x, y, s, s);
+        
+        // PHASE 0: Studio/Development Theme Background
+        if (this.cutscenePhase === 0) {
+            this.drawWWSStudioBackground(ctx, w, h);
+        } 
+        // PHASE 1: Deep Space/Quantum Theme Background
+        else if (this.cutscenePhase === 1) {
+            this.drawSpaceBellQuantumBackground(ctx, w, h);
         }
-        ctx.globalAlpha = 1;
+        
+        if (this.cutscenePhase === 0) {
+            // Phase 0: Will's-Way-Studios animated logo
+            // Hide cursor (ship will be drawn at mouse position)
+            if (this.cutsceneCanvas) {
+                this.cutsceneCanvas.style.cursor = 'none';
+            }
+            if (this.cutsceneOverlay) {
+                this.cutsceneOverlay.style.cursor = 'none';
+            }
+            document.body.style.cursor = 'none';
+            this.drawWillsWayStudiosLogo(ctx, w, h, this.cutsceneTime);
+        } else if (this.cutscenePhase === 1) {
+            // Phase 1: SpaceBell interactive logo
+            // Hide cursor (ship will be drawn at mouse position)
+            if (this.cutsceneCanvas) {
+                this.cutsceneCanvas.style.cursor = 'none';
+            }
+            if (this.cutsceneOverlay) {
+                this.cutsceneOverlay.style.cursor = 'none';
+            }
+            document.body.style.cursor = 'none';
+            this.drawSpaceBellInteractive(ctx, w, h);
+        } else {
+            // Fallback: if phase is not 0 or 1, default to phase 0
+            console.warn(`[Cutscene] Unknown phase ${this.cutscenePhase}, defaulting to phase 0`);
+            this.cutscenePhase = 0;
+            this.drawWillsWayStudiosLogo(ctx, w, h, this.cutsceneTime);
+        }
+        
+        ctx.restore();
+    }
+    
+    // Draw Studio/Development Theme Background (Phase 0)
+    drawWWSStudioBackground(ctx, w, h) {
+        const time = this.cutsceneTime || 0;
+        
+        // Darker, more captivating background gradient (deep space with subtle color hints)
+        const bgGradient = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 1.2);
+        bgGradient.addColorStop(0, '#0a0515'); // Very dark center
+        bgGradient.addColorStop(0.2, '#0f0a1a'); // Dark purple-black
+        bgGradient.addColorStop(0.4, '#0a0510'); // Deeper dark
+        bgGradient.addColorStop(0.7, '#050508'); // Almost black
+        bgGradient.addColorStop(1, '#000000'); // Pure black edge
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, w, h);
+        
+        // Subtle color accent overlay (very dark but with hints of color)
+        const colorOverlay = ctx.createRadialGradient(w * 0.3, h * 0.3, 0, w * 0.7, h * 0.7, Math.max(w, h) * 0.8);
+        colorOverlay.addColorStop(0, 'rgba(156, 39, 176, 0.15)'); // Subtle purple
+        colorOverlay.addColorStop(0.5, 'rgba(33, 150, 243, 0.12)'); // Subtle blue
+        colorOverlay.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = colorOverlay;
+        ctx.fillRect(0, 0, w, h);
+        
+        // Darker, more captivating floating stars/particles (like Phase 2 but distinct)
+        for (let i = 0; i < 150; i++) {
+            const seed = i * 137.5;
+            const x = (seed) % w;
+            const y = (seed * 1.618) % h;
+            const twinkle = Math.sin(time * 0.8 + i * 0.1) * 0.5 + 0.5;
+            const size = (i % 3) + 0.5;
+            
+            // Darker but captivating colors: deep purple, dark cyan, subtle gold
+            const colorType = i % 3;
+            let starColor, starAlpha;
+            if (colorType === 0) {
+                starColor = `rgba(156, 39, 176, ${0.7 * twinkle})`; // Deep purple
+                starAlpha = 0.7 * twinkle;
+            } else if (colorType === 1) {
+                starColor = `rgba(33, 150, 243, ${0.8 * twinkle})`; // Dark blue
+                starAlpha = 0.8 * twinkle;
+            } else {
+                starColor = `rgba(255, 193, 7, ${0.5 * twinkle})`; // Subtle gold
+                starAlpha = 0.5 * twinkle;
+            }
+            
+            ctx.fillStyle = starColor;
+            ctx.shadowBlur = size * 4;
+            ctx.shadowColor = starColor;
+            ctx.beginPath();
+            ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Quantum-like energy particles (orbiting around multiple centers)
+        for (let center = 0; center < 3; center++) {
+            const centerX = w * (0.2 + center * 0.3);
+            const centerY = h * (0.3 + center * 0.2);
+            
+            for (let i = 0; i < 20; i++) {
+                const angle = time * 0.3 + i * 0.3 + center;
+                const radius = 80 + (i % 5) * 25;
+                const x = centerX + Math.cos(angle) * radius;
+                const y = centerY + Math.sin(angle) * radius;
+                const pulse = Math.sin(time * 2 + i * 0.2) * 0.4 + 0.6;
+                const particleSize = 2 + Math.sin(time * 1.5 + i) * 0.8;
+                
+                // Darker but captivating colors
+                const colorType = center % 3;
+                let particleColor;
+                if (colorType === 0) {
+                    particleColor = `rgba(156, 39, 176, ${0.6 * pulse})`; // Deep purple
+                } else if (colorType === 1) {
+                    particleColor = `rgba(33, 150, 243, ${0.7 * pulse})`; // Dark blue
+                } else {
+                    particleColor = `rgba(79, 195, 247, ${0.6 * pulse})`; // Cyan
+                }
+                
+                // Outer glow
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = particleColor;
+                ctx.fillStyle = particleColor;
+                ctx.beginPath();
+                ctx.arc(x, y, particleSize, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                
+                // Inner bright core
+                ctx.fillStyle = particleColor.replace('0.6', '0.9').replace('0.7', '1.0');
+                ctx.beginPath();
+                ctx.arc(x, y, particleSize * 0.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        // Energy connection lines (like Phase 2 but distinct)
+        ctx.strokeStyle = 'rgba(156, 39, 176, 0.2)';
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 12; i++) {
+            const angle1 = time * 0.12 + i * 0.5;
+            const angle2 = time * 0.12 + (i + 2) * 0.5;
+            const radius = 120 + (i % 4) * 50;
+            const x1 = w * 0.5 + Math.cos(angle1) * radius;
+            const y1 = h * 0.5 + Math.sin(angle1) * radius;
+            const x2 = w * 0.5 + Math.cos(angle2) * radius;
+            const y2 = h * 0.5 + Math.sin(angle2) * radius;
+            
+            // Connection line with subtle glow
+            ctx.shadowBlur = 5;
+            ctx.shadowColor = 'rgba(156, 39, 176, 0.3)';
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            
+            // Energy flow along connection
+            const flowPos = (time * 0.35 + i * 0.1) % 1;
+            const flowX = x1 + (x2 - x1) * flowPos;
+            const flowY = y1 + (y2 - y1) * flowPos;
+            const flowPulse = Math.sin(time * 2.5 + i) * 0.3 + 0.7;
+            
+            ctx.fillStyle = `rgba(79, 195, 247, ${0.8 * flowPulse})`;
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.8)';
+            ctx.beginPath();
+            ctx.arc(flowX, flowY, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Dark nebula clouds (subtle, dark but captivating)
+        for (let i = 0; i < 4; i++) {
+            const nebulaX = w * (0.15 + i * 0.25) + Math.sin(time * 0.04 + i) * 60;
+            const nebulaY = h * (0.25 + i * 0.2) + Math.cos(time * 0.05 + i) * 50;
+            const nebulaSize = 180 + Math.sin(time * 0.25 + i) * 40;
+            const nebulaAlpha = 0.12 + Math.sin(time * 0.3 + i) * 0.08;
+            
+            const nebulaGradient = ctx.createRadialGradient(nebulaX, nebulaY, 0, nebulaX, nebulaY, nebulaSize);
+            nebulaGradient.addColorStop(0, `rgba(156, 39, 176, ${nebulaAlpha})`);
+            nebulaGradient.addColorStop(0.4, `rgba(33, 150, 243, ${nebulaAlpha * 0.7})`);
+            nebulaGradient.addColorStop(0.8, `rgba(79, 195, 247, ${nebulaAlpha * 0.4})`);
+            nebulaGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            ctx.fillStyle = nebulaGradient;
+            ctx.beginPath();
+            ctx.arc(nebulaX, nebulaY, nebulaSize, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Darker, more subtle energy waves (expanding rings)
+        for (let i = 1; i <= 3; i++) {
+            const waveRadius = 150 + i * 100 + Math.sin(time * 1.2 + i) * 40;
+            const waveAlpha = (0.2 / i) * (1 - (waveRadius % 500) / 500);
+            
+            // Darker colors: deep purple, dark blue
+            const colorIndex = i % 2;
+            let waveColor;
+            if (colorIndex === 0) {
+                waveColor = `rgba(156, 39, 176, ${waveAlpha})`;
+            } else {
+                waveColor = `rgba(33, 150, 243, ${waveAlpha})`;
+            }
+            
+            ctx.strokeStyle = waveColor;
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = waveColor;
+            ctx.beginPath();
+            ctx.arc(w * 0.5, h * 0.5, waveRadius % (Math.max(w, h) * 0.7), 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Central core (darker but captivating)
+        const corePulse = Math.sin(time * 2) * 0.2 + 0.8;
+        const coreSize = 8 + Math.sin(time * 2.5) * 2;
+        
+        // Outer pulsing rings (darker colors)
+        for (let i = 1; i <= 4; i++) {
+            const ringRadius = coreSize * i * 2;
+            const ringAlpha = (0.2 / i) * corePulse;
+            const ringPulse = Math.sin(time * 2 + i * 0.4) * 0.3 + 0.7;
+            
+            // Alternating dark purple and dark blue
+            const colorIndex = i % 2;
+            let ringColor;
+            if (colorIndex === 0) {
+                ringColor = `rgba(156, 39, 176, ${ringAlpha * ringPulse})`;
+            } else {
+                ringColor = `rgba(33, 150, 243, ${ringAlpha * ringPulse})`;
+            }
+            
+            ctx.strokeStyle = ringColor;
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = ringColor;
+            ctx.beginPath();
+            ctx.arc(w * 0.5, h * 0.5, ringRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Central core with darker gradient
+        const coreGradient = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, coreSize);
+        coreGradient.addColorStop(0, `rgba(79, 195, 247, ${0.85 * corePulse})`);
+        coreGradient.addColorStop(0.5, `rgba(156, 39, 176, ${0.7 * corePulse})`);
+        coreGradient.addColorStop(1, `rgba(33, 150, 243, ${0.6 * corePulse})`);
+        ctx.shadowBlur = 35;
+        ctx.shadowColor = 'rgba(79, 195, 247, 0.8)';
+        ctx.fillStyle = coreGradient;
+        ctx.beginPath();
+        ctx.arc(w * 0.5, h * 0.5, coreSize, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        // Character silhouettes floating (Bell and Einstein - subtle)
+        for (let i = 0; i < 2; i++) {
+            const charX = (i * w * 0.6 + Math.sin(time * 0.1 + i) * 30) % w;
+            const charY = (i * h * 0.4 + time * 5 + Math.cos(time * 0.15 + i) * 20) % h;
+            const charAlpha = 0.08 + Math.sin(time * 1.2 + i) * 0.04;
+            const charScale = 0.3 + Math.sin(time + i) * 0.1;
+            
+            ctx.save();
+            ctx.globalAlpha = charAlpha;
+            ctx.translate(charX, charY);
+            ctx.scale(charScale, charScale);
+            
+            // Draw character silhouette (simplified)
+            if (i === 0) {
+                // Bell silhouette (lab coat)
+                ctx.fillStyle = 'rgba(79, 195, 247, 0.5)';
+                ctx.fillRect(-15, -30, 30, 50);
+                // Head
+                ctx.beginPath();
+                ctx.arc(0, -35, 12, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                // Einstein silhouette (wild hair)
+                ctx.fillStyle = 'rgba(79, 195, 247, 0.5)';
+                // Head
+                ctx.beginPath();
+                ctx.arc(0, -30, 10, 0, Math.PI * 2);
+                ctx.fill();
+                // Hair spikes
+                for (let j = 0; j < 8; j++) {
+                    const hairAngle = (j / 8) * Math.PI * 2;
+                    const hairX = Math.cos(hairAngle) * 12;
+                    const hairY = -30 + Math.sin(hairAngle) * 8;
+                    ctx.beginPath();
+                    ctx.arc(hairX, hairY, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            
+            ctx.restore();
+        }
+        
+        // Quantum field nodes (intersection points - darker but captivating)
+        for (let i = 0; i < 25; i++) {
+            const angle = time * 0.1 + i * 0.5;
+            const radius = 100 + (i % 6) * 35;
+            const x = w * 0.5 + Math.cos(angle) * radius;
+            const y = h * 0.5 + Math.sin(angle) * radius;
+            const nodePulse = Math.sin(time * 1.8 + i * 0.3) * 0.4 + 0.6;
+            const nodeSize = 2 + Math.sin(time * 2 + i) * 0.8;
+            
+            // Darker colors: deep purple, dark blue, cyan
+            const colorIndex = i % 3;
+            let nodeColor;
+            if (colorIndex === 0) {
+                nodeColor = `rgba(156, 39, 176, ${0.5 * nodePulse})`;
+            } else if (colorIndex === 1) {
+                nodeColor = `rgba(33, 150, 243, ${0.6 * nodePulse})`;
+            } else {
+                nodeColor = `rgba(79, 195, 247, ${0.5 * nodePulse})`;
+            }
+            
+            // Outer glow
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = nodeColor;
+            ctx.fillStyle = nodeColor;
+            ctx.beginPath();
+            ctx.arc(x, y, nodeSize, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            // Inner bright core
+            ctx.fillStyle = nodeColor.replace('0.5', '0.9').replace('0.6', '1.0');
+            ctx.beginPath();
+            ctx.arc(x, y, nodeSize * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+    
+    // Draw Deep Space/Quantum Theme Background (Phase 1)
+    drawSpaceBellQuantumBackground(ctx, w, h) {
+        const time = this.cutsceneTime || 0;
+        
+        // Deep space gradient (purple/blue quantum field)
+        const bgGradient = ctx.createRadialGradient(
+            w * 0.5, h * 0.5, 0,
+            w * 0.5, h * 0.5, Math.max(w, h) * 0.9
+        );
+        bgGradient.addColorStop(0, '#1a0a2e');
+        bgGradient.addColorStop(0.4, '#16213e');
+        bgGradient.addColorStop(0.8, '#0f0f1e');
+        bgGradient.addColorStop(1, '#0a0a1a');
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, w, h);
+        
+        // Quantum entangled stars (cyan/blue with twinkling)
+        for (let i = 0; i < 200; i++) {
+            const seed = i * 137.5;
+            const x = (seed) % w;
+            const y = (seed * 1.618) % h;
+            const twinkle = Math.sin(time * 0.6 + i * 0.1) * 0.4 + 0.6;
+            const size = (i % 3) + 1;
+            const blueTint = Math.sin(time * 0.3 + i) * 0.3 + 0.7;
+            
+            ctx.fillStyle = `rgba(129, 212, 250, ${0.9 * twinkle * blueTint})`;
+            ctx.shadowBlur = size * 2;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.6)';
+            ctx.beginPath();
+            ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Entangled particle pairs (connected quantum particles)
+        ctx.strokeStyle = 'rgba(79, 195, 247, 0.3)';
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 25; i++) {
+            const angle1 = time * 0.15 + i * 0.3;
+            const angle2 = time * 0.15 + i * 0.3 + Math.PI;
+            const radius = 100 + (i % 6) * 50;
+            const x1 = w * 0.5 + Math.cos(angle1) * radius;
+            const y1 = h * 0.5 + Math.sin(angle1) * radius;
+            const x2 = w * 0.5 + Math.cos(angle2) * radius;
+            const y2 = h * 0.5 + Math.sin(angle2) * radius;
+            
+            // Connection line with glow
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.4)';
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            
+            // Particles with pulse
+            const pulse = Math.sin(time * 2 + i) * 0.3 + 0.7;
+            ctx.fillStyle = `rgba(79, 195, 247, ${0.7 * pulse})`;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.8)';
+            ctx.beginPath();
+            ctx.arc(x1, y1, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x2, y2, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Quantum correlation waves (expanding rings)
+        ctx.strokeStyle = 'rgba(79, 195, 247, 0.2)';
+        ctx.lineWidth = 2;
+        for (let i = 1; i <= 4; i++) {
+            const waveRadius = 150 + i * 80 + Math.sin(time * 1.5 + i) * 30;
+            const waveAlpha = (0.3 / i) * (1 - (waveRadius % 400) / 400);
+            ctx.strokeStyle = `rgba(79, 195, 247, ${waveAlpha})`;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.5)';
+            ctx.beginPath();
+            ctx.arc(w * 0.5, h * 0.5, waveRadius % (Math.max(w, h) * 0.6), 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Quantum field particles (orbiting particles with trails)
+        for (let i = 0; i < 60; i++) {
+            const angle = time * 0.2 + i * 0.4;
+            const radius = 120 + i * 12;
+            const x = w * 0.5 + Math.cos(angle) * radius;
+            const y = h * 0.5 + Math.sin(angle) * radius;
+            const pulse = Math.sin(time * 2 + i * 0.2) * 0.3 + 0.7;
+            const particleSize = 2 + Math.sin(time * 1.5 + i) * 0.5;
+            
+            // Particle trail (previous position)
+            const prevAngle = angle - 0.1;
+            const prevX = w * 0.5 + Math.cos(prevAngle) * radius;
+            const prevY = h * 0.5 + Math.sin(prevAngle) * radius;
+            
+            // Draw trail
+            ctx.strokeStyle = `rgba(79, 195, 247, ${0.2 * pulse})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(prevX, prevY);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+            
+            // Outer glow
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.7)';
+            ctx.fillStyle = `rgba(79, 195, 247, ${0.5 * pulse})`;
+            ctx.beginPath();
+            ctx.arc(x, y, particleSize, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            // Inner bright core
+            ctx.fillStyle = `rgba(129, 212, 250, ${0.9 * pulse})`;
+            ctx.beginPath();
+            ctx.arc(x, y, particleSize * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Quantum energy connections (flowing energy lines)
+        ctx.strokeStyle = 'rgba(79, 195, 247, 0.2)';
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 15; i++) {
+            const angle1 = time * 0.1 + i * 0.4;
+            const angle2 = time * 0.1 + (i + 3) * 0.4;
+            const radius = 150 + (i % 4) * 40;
+            const x1 = w * 0.5 + Math.cos(angle1) * radius;
+            const y1 = h * 0.5 + Math.sin(angle1) * radius;
+            const x2 = w * 0.5 + Math.cos(angle2) * radius;
+            const y2 = h * 0.5 + Math.sin(angle2) * radius;
+            
+            // Connection line
+            ctx.shadowBlur = 6;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.4)';
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            
+            // Energy flow along connection
+            const flowPos = (time * 0.4 + i * 0.1) % 1;
+            const flowX = x1 + (x2 - x1) * flowPos;
+            const flowY = y1 + (y2 - y1) * flowPos;
+            const flowPulse = Math.sin(time * 3 + i) * 0.3 + 0.7;
+            
+            ctx.fillStyle = `rgba(129, 212, 250, ${0.9 * flowPulse})`;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.9)';
+            ctx.beginPath();
+            ctx.arc(flowX, flowY, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Central quantum core (pulsing center)
+        const corePulse = Math.sin(time * 2) * 0.2 + 0.8;
+        const coreSize = 8 + Math.sin(time * 2.5) * 2;
+        
+        // Outer pulsing rings
+        for (let i = 1; i <= 5; i++) {
+            const ringRadius = coreSize * i * 3;
+            const ringAlpha = (0.25 / i) * corePulse;
+            const ringPulse = Math.sin(time * 2 + i * 0.4) * 0.3 + 0.7;
+            ctx.strokeStyle = `rgba(79, 195, 247, ${ringAlpha * ringPulse})`;
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.5)';
+            ctx.beginPath();
+            ctx.arc(w * 0.5, h * 0.5, ringRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Central core with intense glow
+        ctx.shadowBlur = 40;
+        ctx.shadowColor = 'rgba(79, 195, 247, 1.0)';
+        ctx.fillStyle = `rgba(129, 212, 250, ${0.95 * corePulse})`;
+        ctx.beginPath();
+        ctx.arc(w * 0.5, h * 0.5, coreSize, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        // Quantum field nodes (intersection points with enhanced glow)
+        for (let i = 0; i < 30; i++) {
+            const angle = time * 0.1 + i * 0.5;
+            const radius = 100 + (i % 7) * 40;
+            const x = w * 0.5 + Math.cos(angle) * radius;
+            const y = h * 0.5 + Math.sin(angle) * radius;
+            const nodePulse = Math.sin(time * 1.8 + i * 0.3) * 0.4 + 0.6;
+            const nodeSize = 2.5 + Math.sin(time * 2 + i) * 1;
+            
+            // Outer glow
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.8)';
+            ctx.fillStyle = `rgba(79, 195, 247, ${0.6 * nodePulse})`;
+            ctx.beginPath();
+            ctx.arc(x, y, nodeSize, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            // Inner bright core
+            ctx.fillStyle = `rgba(129, 212, 250, ${1.0 * nodePulse})`;
+            ctx.beginPath();
+            ctx.arc(x, y, nodeSize * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Nebula clouds (subtle purple/blue clouds)
+        for (let i = 0; i < 3; i++) {
+            const nebulaX = w * (0.2 + i * 0.3) + Math.sin(time * 0.05 + i) * 50;
+            const nebulaY = h * (0.3 + i * 0.2) + Math.cos(time * 0.06 + i) * 40;
+            const nebulaSize = 150 + Math.sin(time * 0.3 + i) * 30;
+            const nebulaAlpha = 0.15 + Math.sin(time * 0.4 + i) * 0.1;
+            
+            const nebulaGradient = ctx.createRadialGradient(nebulaX, nebulaY, 0, nebulaX, nebulaY, nebulaSize);
+            nebulaGradient.addColorStop(0, `rgba(156, 39, 176, ${nebulaAlpha})`);
+            nebulaGradient.addColorStop(0.5, `rgba(79, 195, 247, ${nebulaAlpha * 0.6})`);
+            nebulaGradient.addColorStop(1, 'rgba(79, 195, 247, 0)');
+            ctx.fillStyle = nebulaGradient;
+            ctx.beginPath();
+            ctx.arc(nebulaX, nebulaY, nebulaSize, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+    
+    // Draw Will's-Way-Studios animated logo
+    drawWillsWayStudiosLogo(ctx, w, h, time) {
+        // Get logo position from physics data (or use center if not initialized)
+        const data = this.willsWayIntroData || {};
+        let x = data.logoX || w * 0.5;
+        let y = data.logoY || h * 0.5;
+        
+        // Simple fade in on first appearance
+        let alpha = Math.min(1, time / 1); // Fade in over 1 second
+        
+        // Pulsing effect based on time
+        const pulse = Math.sin(time * 2) * 0.1 + 1.0; // Pulse between 0.9 and 1.1
+        
+        // Check for recent hits to add impact glow
+        const currentTime = this.cutsceneTime || time;
+        const recentHit = data.lastHitTime && (currentTime - data.lastHitTime) < 0.5;
+        const hitIntensity = recentHit ? Math.max(0, 1 - (currentTime - data.lastHitTime) / 0.5) : 0;
+        
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(x, y);
+        
+        // Draw impact effects if recently hit
+        if (recentHit && data.lastHitX !== undefined && data.lastHitY !== undefined) {
+            const hitX = data.lastHitX - x;
+            const hitY = data.lastHitY - y;
+            
+            // Impact shockwave rings
+            for (let i = 0; i < 3; i++) {
+                const ringTime = (currentTime - data.lastHitTime) + i * 0.1;
+                if (ringTime > 0 && ringTime < 0.5) {
+                    const ringRadius = ringTime * 200;
+                    const ringAlpha = (1 - ringTime / 0.5) * 0.6 * hitIntensity;
+                    ctx.strokeStyle = `rgba(79, 195, 247, ${ringAlpha})`;
+                    ctx.lineWidth = 3;
+                    ctx.shadowBlur = 20;
+                    ctx.shadowColor = 'rgba(79, 195, 247, 0.8)';
+                    ctx.beginPath();
+                    ctx.arc(hitX, hitY, ringRadius, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+            }
+            
+            // Impact particle burst
+            if (data.hitParticles) {
+                data.hitParticles.forEach(particle => {
+                    const particleAlpha = (1 - particle.lifetime / particle.maxLifetime) * 0.8;
+                    const particleGradient = ctx.createRadialGradient(
+                        particle.x - x, particle.y - y, 0,
+                        particle.x - x, particle.y - y, particle.size
+                    );
+                    particleGradient.addColorStop(0, `rgba(79, 195, 247, ${particleAlpha})`);
+                    particleGradient.addColorStop(0.5, `rgba(156, 39, 176, ${particleAlpha * 0.7})`);
+                    particleGradient.addColorStop(1, `rgba(33, 150, 243, ${particleAlpha * 0.4})`);
+                    ctx.fillStyle = particleGradient;
+                    ctx.shadowBlur = particle.size * 2;
+                    ctx.shadowColor = 'rgba(79, 195, 247, 0.8)';
+                    ctx.beginPath();
+                    ctx.arc(particle.x - x, particle.y - y, particle.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                });
+            }
+        }
+        
+        // Enhanced logo text with dynamic lighting and multiple glow layers
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        // Impact glow overlay (when hit)
+        if (hitIntensity > 0) {
+            const impactGlow = ctx.createRadialGradient(0, 0, 0, 0, 0, 300);
+            impactGlow.addColorStop(0, `rgba(79, 195, 247, ${0.4 * hitIntensity})`);
+            impactGlow.addColorStop(0.5, `rgba(156, 39, 176, ${0.3 * hitIntensity})`);
+            impactGlow.addColorStop(1, 'rgba(79, 195, 247, 0)');
+            ctx.fillStyle = impactGlow;
+            ctx.beginPath();
+            ctx.arc(0, 0, 300, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Outer glow layer 1 (largest, most transparent, pulsing)
+        ctx.shadowColor = 'rgba(79, 195, 247, 0.7)';
+        ctx.shadowBlur = 60 * pulse;
+        ctx.fillStyle = 'rgba(79, 195, 247, 0.4)';
+        ctx.font = 'bold 64px "Segoe UI", sans-serif';
+        ctx.fillText("Will's-Way-Studios", 0, -20);
+        
+        // Outer glow layer 2 (pulsing)
+        ctx.shadowColor = 'rgba(79, 195, 247, 0.9)';
+        ctx.shadowBlur = 50 * pulse;
+        ctx.fillStyle = 'rgba(79, 195, 247, 0.6)';
+        ctx.fillText("Will's-Way-Studios", 0, -20);
+        
+        // Outer glow layer 3 (enhanced with hit intensity)
+        const glowIntensity = 0.8 + hitIntensity * 0.2;
+        ctx.shadowColor = `rgba(156, 39, 176, ${glowIntensity})`;
+        ctx.shadowBlur = 45 * pulse;
+        ctx.fillStyle = 'rgba(156, 39, 176, 0.5)';
+        ctx.fillText("Will's-Way-Studios", 0, -20);
+        
+        // Main text with enhanced gradient (dynamic based on pulse and hit)
+        const textGradient = ctx.createLinearGradient(-200, -20, 200, -20);
+        const gradientIntensity = 0.8 + pulse * 0.2 + hitIntensity * 0.3;
+        textGradient.addColorStop(0, `rgba(0, 229, 255, ${gradientIntensity})`);
+        textGradient.addColorStop(0.3, `rgba(79, 195, 247, ${gradientIntensity})`);
+        textGradient.addColorStop(0.5, `rgba(156, 39, 176, ${gradientIntensity * 0.9})`);
+        textGradient.addColorStop(0.7, `rgba(79, 195, 247, ${gradientIntensity})`);
+        textGradient.addColorStop(1, `rgba(0, 229, 255, ${gradientIntensity})`);
+        ctx.shadowColor = `rgba(79, 195, 247, ${1.0 + hitIntensity * 0.5})`;
+        ctx.shadowBlur = 40 * pulse;
+        ctx.fillStyle = textGradient;
+        ctx.font = 'bold 64px "Segoe UI", sans-serif';
+        ctx.fillText("Will's-Way-Studios", 0, -20);
+        
+        // Inner highlight (brighter when hit)
+        ctx.shadowBlur = 0;
+        const highlightAlpha = 0.4 + hitIntensity * 0.3;
+        ctx.fillStyle = `rgba(255, 255, 255, ${highlightAlpha})`;
+        ctx.font = 'bold 64px "Segoe UI", sans-serif';
+        ctx.fillText("Will's-Way-Studios", 0, -20);
+        
+        // Animated light sweep effect
+        const sweepPos = (time * 0.5) % 1;
+        const sweepGradient = ctx.createLinearGradient(-200 + sweepPos * 400, -20, -200 + sweepPos * 400 + 100, -20);
+        sweepGradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
+        sweepGradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.6)');
+        sweepGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = sweepGradient;
+        ctx.fillText("Will's-Way-Studios", 0, -20);
+        
+        // Subtitle with enhanced glow and pulsing
+        ctx.shadowColor = 'rgba(0, 229, 255, 0.9)';
+        ctx.shadowBlur = 25 * pulse;
+        ctx.font = '32px "Segoe UI", sans-serif';
+        ctx.fillStyle = '#00e5ff';
+        ctx.fillText('Game Development Studio', 0, 30);
+        ctx.shadowBlur = 0;
+        
+        // Additional outer energy rings (pulsing)
+        for (let i = 1; i <= 2; i++) {
+            const ringRadius = 200 + i * 30 + Math.sin(time * 2 + i) * 10;
+            const ringAlpha = (0.15 / i) * pulse;
+            ctx.strokeStyle = `rgba(79, 195, 247, ${ringAlpha})`;
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.5)';
+            ctx.beginPath();
+            ctx.arc(0, 0, ringRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+        
         ctx.restore();
         
-        // vignette
-        const vignette = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.65);
-        vignette.addColorStop(0, 'rgba(0,0,0,0)');
-        vignette.addColorStop(1, 'rgba(0,0,0,0.65)');
-        ctx.fillStyle = vignette;
-        ctx.fillRect(0, 0, w, h);
+        // Draw puzzle message if active (after logo, before bullets)
+        if (data.puzzleMessage && data.puzzleMessageTime !== undefined && data.puzzleMessageTime >= 0) {
+            const currentTime = this.cutsceneTime || time;
+            const messageAge = currentTime - data.puzzleMessageTime;
+            if (messageAge >= 0 && messageAge < 3) {
+                const messageAlpha = messageAge < 0.5 ? messageAge / 0.5 : Math.max(0, (3 - messageAge) / 2.5); // Fade in then fade out
+                ctx.save();
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.globalAlpha = messageAlpha;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = 'bold 48px "Segoe UI", sans-serif';
+                
+                // Message background
+                const messageText = data.puzzleMessage;
+                const textMetrics = ctx.measureText(messageText);
+                const padding = 20;
+                const bgX = w * 0.5 - textMetrics.width * 0.5 - padding;
+                const bgY = h * 0.3 - 30;
+                const bgWidth = textMetrics.width + padding * 2;
+                const bgHeight = 60;
+                
+                // Background with glow
+                const bgGradient = ctx.createLinearGradient(bgX, bgY, bgX + bgWidth, bgY + bgHeight);
+                bgGradient.addColorStop(0, 'rgba(0, 0, 0, 0.8)');
+                bgGradient.addColorStop(0.5, 'rgba(79, 195, 247, 0.3)');
+                bgGradient.addColorStop(1, 'rgba(0, 0, 0, 0.8)');
+                ctx.fillStyle = bgGradient;
+                ctx.shadowBlur = 30;
+                ctx.shadowColor = 'rgba(79, 195, 247, 0.8)';
+                ctx.fillRect(bgX, bgY, bgWidth, bgHeight);
+                
+                // Message text
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = 'rgba(79, 195, 247, 1.0)';
+                ctx.fillStyle = '#4fc3f7';
+                ctx.fillText(messageText, w * 0.5, h * 0.3);
+                
+                ctx.restore();
+            }
+        }
         
-        // positions
+        // Draw bullets with trail effect - SAME AS PHASE 1
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        if (data.bullets && data.bullets.length > 0) {
+            data.bullets.forEach(bullet => {
+                // Bullet trail (same as Phase 1)
+                const trailGradient = ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, 8);
+                trailGradient.addColorStop(0, 'rgba(79, 195, 247, 0.8)');
+                trailGradient.addColorStop(0.5, 'rgba(79, 195, 247, 0.4)');
+                trailGradient.addColorStop(1, 'rgba(79, 195, 247, 0)');
+                ctx.fillStyle = trailGradient;
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y, 8, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Bullet core (same as Phase 1)
+                ctx.fillStyle = '#4fc3f7';
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowColor = '#4fc3f7';
+                ctx.shadowBlur = 15;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            });
+        }
+        ctx.restore();
+        
+        // Draw ship - SAME AS PHASE 1
+        if (data.shipX !== undefined && data.shipY !== undefined && data.shipAngle !== undefined) {
+            this.drawIntroShip(ctx, data.shipX, data.shipY, data.shipAngle);
+        }
+    }
+    
+    // Draw SpaceBell interactive logo (Phase 1)
+    drawSpaceBellInteractive(ctx, w, h) {
+        if (!this.willsWayIntroData) {
+            this.willsWayIntroData = {
+                letterLights: {},
+                letterHitEffects: {},
+                shipX: w * 0.5,
+                shipY: h * 0.8,
+                shipAngle: Math.PI / 2,
+                bullets: [],
+                allLettersLit: false,
+                lastShootTime: 0
+            };
+        }
+        
+        const data = this.willsWayIntroData;
+        
+        // Update ship position (follow mouse) - use cutscene canvas coordinates
+        // Get mouse position relative to cutscene canvas
+        let targetX = data.shipX;
+        let targetY = data.shipY;
+        
+        if (this.mouse && this.cutsceneCanvas) {
+            // Convert mouse coordinates to cutscene canvas coordinates
+            const canvasRect = this.cutsceneCanvas.getBoundingClientRect();
+            const mainCanvasRect = this.canvas.getBoundingClientRect();
+            // Convert main canvas mouse position to cutscene canvas coordinates
+            targetX = this.mouse.x + (mainCanvasRect.left - canvasRect.left);
+            targetY = this.mouse.y + (mainCanvasRect.top - canvasRect.top);
+            
+            // Clamp to canvas bounds
+            targetX = Math.max(0, Math.min(w, targetX));
+            targetY = Math.max(0, Math.min(h, targetY));
+            
+            // Smooth interpolation
+            data.shipX += (targetX - data.shipX) * 0.15;
+            data.shipY += (targetY - data.shipY) * 0.15;
+            
+            // Update ship angle
+            const dx = targetX - data.shipX;
+            const dy = targetY - data.shipY;
+            if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                data.shipAngle = Math.atan2(dy, dx) + Math.PI / 2;
+            }
+        }
+        
+        // Use unique identifiers for duplicate letters (e1, e2, l1, l2)
+        const textX = w * 0.5;
+        const textY = h * 0.4;
+        const fontSize = Math.min(120, w * 0.15);
+        // Letters to display: ['S', 'p', 'a', 'c', 'e', 'B', 'e', 'l', 'l']
+        // Unique IDs for tracking: ['S', 'p', 'a', 'c', 'e1', 'B', 'e2', 'l1', 'l2']
+        const letterDisplay = ['S', 'p', 'a', 'c', 'e', 'B', 'e', 'l', 'l'];
+        const letterIds = ['S', 'p', 'a', 'c', 'e1', 'B', 'e2', 'l1', 'l2']; // Unique IDs for tracking
+        
+        // Store letter positions for hit detection (using unique IDs)
+        if (!data.letterPositions) {
+            data.letterPositions = {};
+            ctx.save();
+            ctx.font = `bold ${fontSize}px "Segoe UI", sans-serif`;
+            let totalWidth = 0;
+            const letterWidths = [];
+            letterDisplay.forEach(letter => {
+                const metrics = ctx.measureText(letter);
+                letterWidths.push(metrics.width);
+                totalWidth += metrics.width;
+            });
+            ctx.restore();
+            
+            const startX = textX - totalWidth * 0.5;
+            let currentX = startX;
+            letterDisplay.forEach((letter, index) => {
+                const letterId = letterIds[index]; // Use unique ID
+                const letterX = currentX + letterWidths[index] * 0.5;
+                currentX += letterWidths[index];
+                data.letterPositions[letterId] = {
+                    x: letterX,
+                    y: textY,
+                    width: letterWidths[index],
+                    height: fontSize,
+                    displayLetter: letter // Store the actual letter to display
+                };
+            });
+        }
+        
+        // Draw SpaceBell text with enhanced quantum effects
+        ctx.save();
+        ctx.font = `bold ${fontSize}px "Segoe UI", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        // Add quantum field effect behind text
+        const quantumFieldGradient = ctx.createRadialGradient(textX, textY, 0, textX, textY, fontSize * 3);
+        quantumFieldGradient.addColorStop(0, 'rgba(79, 195, 247, 0.2)');
+        quantumFieldGradient.addColorStop(0.5, 'rgba(156, 39, 176, 0.15)');
+        quantumFieldGradient.addColorStop(1, 'rgba(79, 195, 247, 0)');
+        ctx.fillStyle = quantumFieldGradient;
+        ctx.beginPath();
+        ctx.arc(textX, textY, fontSize * 3, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Letter colors (from website)
+        const letterColors = {
+            'S': '#9c27b0', 'p': '#ff9800', 'a': '#00bcd4', 'c': '#e91e63',
+            'e': '#ff6f00', 'B': '#7b1fa2', 'l': '#0097a7'
+        };
+        
+        // Draw each letter using unique IDs
+        letterIds.forEach((letterId, index) => {
+            const pos = data.letterPositions[letterId];
+            if (!pos) return;
+            
+            const letter = letterDisplay[index];
+            const letterX = pos.x;
+            const isLit = data.letterLights[letterId] === true;
+            const color = letterColors[letter] || '#9c27b0';
+            
+            // Draw letter with enhanced effects
+            if (isLit) {
+                // Lit: bright gradient with pulsing glow
+                const pulse = 1 + Math.sin(this.cutsceneTime * 3) * 0.1;
+                const gradient = ctx.createLinearGradient(letterX - pos.width * 0.5, textY - fontSize * 0.5, letterX + pos.width * 0.5, textY + fontSize * 0.5);
+                gradient.addColorStop(0, color);
+                gradient.addColorStop(0.5, this.lightenColor(color, 0.4));
+                gradient.addColorStop(1, color);
+                ctx.fillStyle = gradient;
+                ctx.shadowColor = color;
+                ctx.shadowBlur = 40 * pulse;
+            } else {
+                // Unlit: dim with colored border (like website)
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 3;
+                ctx.shadowBlur = 0;
+            }
+            
+            ctx.fillText(letter, letterX, textY);
+            if (!isLit) {
+                ctx.strokeText(letter, letterX, textY);
+            }
+            ctx.shadowBlur = 0;
+        });
+        
+        ctx.restore();
+        
+        // Draw ring effects
+        Object.values(data.letterHitEffects).forEach(effect => {
+            if (effect.isActive) {
+                this.drawRingEffect(ctx, effect.letterCenterX, effect.letterCenterY, effect.color, effect.time);
+            }
+        });
+        
+        // Draw bullets with trail effect
+        ctx.save();
+        data.bullets.forEach(bullet => {
+            // Bullet trail
+            const trailGradient = ctx.createRadialGradient(bullet.x, bullet.y, 0, bullet.x, bullet.y, 8);
+            trailGradient.addColorStop(0, 'rgba(79, 195, 247, 0.8)');
+            trailGradient.addColorStop(0.5, 'rgba(79, 195, 247, 0.4)');
+            trailGradient.addColorStop(1, 'rgba(79, 195, 247, 0)');
+            ctx.fillStyle = trailGradient;
+            ctx.beginPath();
+            ctx.arc(bullet.x, bullet.y, 8, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Bullet core
+            ctx.fillStyle = '#4fc3f7';
+            ctx.beginPath();
+            ctx.arc(bullet.x, bullet.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowColor = '#4fc3f7';
+            ctx.shadowBlur = 15;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        });
+        ctx.restore();
+        
+        // Draw ship
+        this.drawIntroShip(ctx, data.shipX, data.shipY, data.shipAngle);
+        
+        // Draw instructions
+        ctx.save();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.font = '24px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const instructionsY = h * 0.75;
+        ctx.fillText('Shoot the letters to light them up!', textX, instructionsY);
+        ctx.restore();
+        
+        // Draw completion message when all letters are lit
+        if (data.allLettersLit) {
+            ctx.save();
+            const completionAlpha = Math.min(1, (this.cutsceneTime - (data.transitionTime - 1.0)) * 2);
+            ctx.globalAlpha = completionAlpha;
+            ctx.fillStyle = '#4fc3f7';
+            ctx.font = 'bold 36px "Segoe UI", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = '#4fc3f7';
+            ctx.shadowBlur = 20;
+            ctx.fillText('All letters lit!', textX, instructionsY + 40);
+            ctx.shadowBlur = 0;
+            ctx.restore();
+        }
+    }
+    
+    // Helper: Lighten a color
+    lightenColor(color, amount) {
+        // Simple color lightening - convert hex to RGB, lighten, convert back
+        const hex = color.replace('#', '');
+        const r = Math.min(255, parseInt(hex.substr(0, 2), 16) + amount * 255);
+        const g = Math.min(255, parseInt(hex.substr(2, 2), 16) + amount * 255);
+        const b = Math.min(255, parseInt(hex.substr(4, 2), 16) + amount * 255);
+        return `rgb(${r}, ${g}, ${b})`;
+    }
+    
+    // Check for letter hits
+    checkLetterHit(bullet, data, w, h) {
+        if (!data.letterPositions) return; // Letter positions not initialized yet
+        
+        const letterIds = ['S', 'p', 'a', 'c', 'e1', 'B', 'e2', 'l1', 'l2'];
+        const letterDisplay = ['S', 'p', 'a', 'c', 'e', 'B', 'e', 'l', 'l'];
+        const letterColors = {
+            'S': '#9c27b0', 'p': '#ff9800', 'a': '#00bcd4', 'c': '#e91e63',
+            'e': '#ff6f00', 'B': '#7b1fa2', 'l': '#0097a7'
+        };
+        
+        letterIds.forEach((letterId, index) => {
+            const pos = data.letterPositions[letterId];
+            if (!pos) return;
+            
+            const letter = letterDisplay[index];
+            const letterLeft = pos.x - pos.width * 0.5;
+            const letterRight = pos.x + pos.width * 0.5;
+            const letterTop = pos.y - pos.height * 0.5;
+            const letterBottom = pos.y + pos.height * 0.5;
+            
+            // Check if bullet is within letter bounds
+            if (bullet.x >= letterLeft && bullet.x <= letterRight &&
+                bullet.y >= letterTop && bullet.y <= letterBottom) {
+                // Mark bullet as hit to prevent multiple hits
+                bullet.hasHit = true;
+                
+                // Hit! Turn letter light ON (only if not already lit) - use unique ID
+                if (!data.letterLights[letterId]) {
+                    data.letterLights[letterId] = true;
+                
+                    // Add ring effect
+                    data.letterHitEffects[letterId] = {
+                        isActive: true,
+                        letterCenterX: pos.x,
+                        letterCenterY: pos.y,
+                        color: letterColors[letter] || '#9c27b0',
+                        time: 0
+                    };
+                    
+                    // Play hit sound
+                    this.audio.playSFX('hit', 0.5);
+                }
+                
+                // Remove bullet
+                bullet.lifetime = 0;
+            }
+        });
+    }
+    
+    // Draw ring effect (multiple concentric rings like website)
+    drawRingEffect(ctx, x, y, color, time) {
+        const maxTime = 1.0; // 1 second animation
+        
+        // Draw 4 concentric rings with staggered timing
+        for (let ringIndex = 0; ringIndex < 4; ringIndex++) {
+            const ringDelay = ringIndex * 0.12; // Stagger each ring by 0.12s
+            const ringTime = Math.max(0, time - ringDelay);
+            const progress = Math.min(1, ringTime / maxTime);
+            
+            if (progress <= 0) continue; // Ring hasn't started yet
+            
+            const radius = progress * 250;
+            const opacity = (0.9 - ringIndex * 0.2) * (1 - progress);
+            const borderWidth = 3 - ringIndex * 0.5;
+            
+            ctx.save();
+            ctx.globalAlpha = opacity;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = borderWidth * (1 - progress * 0.5); // Fade border width
+            
+            // Outer glow layer
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 8 + ringIndex * 2;
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Main ring
+            ctx.shadowBlur = 0;
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Inner highlight
+            ctx.globalAlpha = opacity * 0.6;
+            ctx.fillStyle = color;
+            const highlightRadius = radius * 0.3;
+            const highlightGradient = ctx.createRadialGradient(x, y, 0, x, y, highlightRadius);
+            highlightGradient.addColorStop(0, color);
+            highlightGradient.addColorStop(1, 'transparent');
+            ctx.fillStyle = highlightGradient;
+            ctx.beginPath();
+            ctx.arc(x, y, highlightRadius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.restore();
+        }
+    }
+    
+    // Draw ship for intro (basic ship from game, not website's ship)
+    drawIntroShip(ctx, x, y, angle) {
+        // Use the actual game ship drawing code
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        
+        const shipSize = 25; // Match game ship size
+        const shipColor = '#4fc3f7';
+        const time = performance.now() * 0.001; // For animated effects
+        
+        // Get the basic ship stats
+        const ship = this.equipmentStats.ships.basic || { color: shipColor, shape: 'triangle' };
+        const actualShipColor = ship.color || shipColor;
+        
+        // Draw the actual game ship (basic ship - triangle shape with fighter jet details)
+        if (ship.shape === 'triangle' || !ship.shape) {
+            // ENHANCED FLAME: Long, realistic flame effect
+            const engineIntensity = 0.9 + Math.sin(time * 15) * 0.1;
+            const exhaustY = shipSize * 0.8; // Back of ship
+            const flameLength = shipSize * 1.5; // Long flame
+            const baseWidth = shipSize * 0.6;
+            
+            // Draw realistic flame layers
+            const flameLayers = [
+                { color: 'rgba(255, 255, 255, 1.0)', width: 0.15, height: 0.4 },
+                { color: 'rgba(255, 255, 200, 0.9)', width: 0.25, height: 0.5 },
+                { color: 'rgba(255, 200, 0, 0.8)', width: 0.4, height: 0.7 },
+                { color: 'rgba(255, 150, 0, 0.7)', width: 0.6, height: 0.9 },
+                { color: 'rgba(255, 100, 0, 0.6)', width: 0.8, height: 1.0 },
+                { color: 'rgba(255, 50, 0, 0.4)', width: 1.0, height: 1.0 },
+            ];
+            
+            flameLayers.forEach((layer, layerIdx) => {
+                ctx.save();
+                ctx.globalAlpha = engineIntensity * parseFloat(layer.color.split(',')[3].replace(')', ''));
+                
+                ctx.beginPath();
+                const startY = exhaustY;
+                const endY = exhaustY + flameLength * layer.height;
+                const startWidth = baseWidth * layer.width * 0.3;
+                const endWidth = baseWidth * layer.width;
+                
+                // Left side with wavy edge
+                ctx.moveTo(-startWidth * 0.5, startY);
+                for (let i = 0; i <= 20; i++) {
+                    const t = i / 20;
+                    const y = startY + (endY - startY) * t;
+                    const currentWidth = startWidth + (endWidth - startWidth) * t;
+                    const wave = Math.sin(time * 20 + t * Math.PI * 4 + layerIdx) * (currentWidth * 0.15 * (1 + t * 0.5));
+                    const x = -currentWidth * 0.5 + wave;
+                    ctx.lineTo(x, y);
+                }
+                
+                // Right side with wavy edge
+                for (let i = 20; i >= 0; i--) {
+                    const t = i / 20;
+                    const y = startY + (endY - startY) * t;
+                    const currentWidth = startWidth + (endWidth - startWidth) * t;
+                    const wave = Math.sin(time * 20 + t * Math.PI * 4 + layerIdx + Math.PI) * (currentWidth * 0.15 * (1 + t * 0.5));
+                    const x = currentWidth * 0.5 + wave;
+                    ctx.lineTo(x, y);
+                }
+                ctx.closePath();
+                
+                const flameGradient = ctx.createLinearGradient(0, startY, 0, endY);
+                flameGradient.addColorStop(0, layer.color);
+                flameGradient.addColorStop(0.5, layer.color.replace(/\d+\.\d+/, '0.6'));
+                flameGradient.addColorStop(1, layer.color.replace(/\d+\.\d+/, '0'));
+                ctx.fillStyle = flameGradient;
+                ctx.fill();
+                ctx.restore();
+            });
+            
+            // Main fuselage gradient (fighter jet style - metallic cyan to deep blue)
+            const fuselageGradient = ctx.createLinearGradient(0, -shipSize * 1.0, 0, shipSize * 0.8);
+            fuselageGradient.addColorStop(0, '#00e5ff'); // Bright atomic cyan at nose
+            fuselageGradient.addColorStop(0.2, '#4fc3f7'); // Cyan
+            fuselageGradient.addColorStop(0.4, '#2196f3'); // Medium blue
+            fuselageGradient.addColorStop(0.6, '#2196f3'); // Medium blue (wider midsection)
+            fuselageGradient.addColorStop(0.8, '#1565c0'); // Deep blue
+            fuselageGradient.addColorStop(1, '#0d47a1'); // Dark atomic blue at tail
+            ctx.fillStyle = fuselageGradient;
+            
+            // Main fuselage body - COMPACT design
+            ctx.beginPath();
+            ctx.moveTo(0, -shipSize * 1.0); // Sharp nose tip
+            ctx.lineTo(-shipSize * 0.15, -shipSize * 0.75);
+            ctx.lineTo(-shipSize * 0.22, -shipSize * 0.45);
+            ctx.lineTo(-shipSize * 0.32, -shipSize * 0.1);
+            ctx.lineTo(-shipSize * 0.35, shipSize * 0.15);
+            ctx.lineTo(-shipSize * 0.32, shipSize * 0.5);
+            ctx.lineTo(-shipSize * 0.25, shipSize * 0.8);
+            ctx.lineTo(shipSize * 0.25, shipSize * 0.8);
+            ctx.lineTo(shipSize * 0.32, shipSize * 0.5);
+            ctx.lineTo(shipSize * 0.35, shipSize * 0.15);
+            ctx.lineTo(shipSize * 0.32, -shipSize * 0.1);
+            ctx.lineTo(shipSize * 0.22, -shipSize * 0.45);
+            ctx.lineTo(shipSize * 0.15, -shipSize * 0.75);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Swept-back wings
+            const wingGradient = ctx.createLinearGradient(0, shipSize * 0.1, 0, shipSize * 0.5);
+            wingGradient.addColorStop(0, '#2196f3');
+            wingGradient.addColorStop(0.5, '#1565c0');
+            wingGradient.addColorStop(1, '#0d47a1');
+            ctx.fillStyle = wingGradient;
+            
+            // Left wing
+            ctx.beginPath();
+            ctx.moveTo(-shipSize * 0.35, shipSize * 0.15);
+            ctx.lineTo(-shipSize * 0.85, shipSize * 0.08);
+            ctx.lineTo(-shipSize * 0.9, shipSize * 0.45);
+            ctx.lineTo(-shipSize * 0.32, shipSize * 0.5);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Right wing
+            ctx.beginPath();
+            ctx.moveTo(shipSize * 0.35, shipSize * 0.15);
+            ctx.lineTo(shipSize * 0.85, shipSize * 0.08);
+            ctx.lineTo(shipSize * 0.9, shipSize * 0.45);
+            ctx.lineTo(shipSize * 0.32, shipSize * 0.5);
+            ctx.closePath();
+            ctx.fill();
+            
+            // ENHANCED DETAILS: Cockpit window
+            ctx.fillStyle = '#00e5ff';
+            ctx.globalAlpha = 0.6;
+            ctx.beginPath();
+            ctx.ellipse(0, shipSize * 0.05, shipSize * 0.18, shipSize * 0.1, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 0.3;
+            ctx.beginPath();
+            ctx.ellipse(0, shipSize * 0.02, shipSize * 0.1, shipSize * 0.06, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+            
+            // ENHANCED DETAILS: Panel lines
+            ctx.strokeStyle = '#2196f3';
+            ctx.globalAlpha = 0.4;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(-shipSize * 0.2, -shipSize * 0.3);
+            ctx.lineTo(-shipSize * 0.15, shipSize * 0.2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(shipSize * 0.2, -shipSize * 0.3);
+            ctx.lineTo(shipSize * 0.15, shipSize * 0.2);
+            ctx.stroke();
+            ctx.globalAlpha = 1.0;
+            
+            // ENHANCED DETAILS: Navigation lights
+            ctx.fillStyle = '#00e5ff';
+            ctx.globalAlpha = 0.8 + Math.sin(time * 5) * 0.2;
+            ctx.beginPath();
+            ctx.arc(-shipSize * 0.25, -shipSize * 0.2, 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(shipSize * 0.25, -shipSize * 0.2, 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+            
+            // ENHANCED DETAILS: Engine exhaust port
+            ctx.fillStyle = 'rgba(50, 50, 50, 0.8)';
+            ctx.beginPath();
+            ctx.ellipse(0, shipSize * 0.75, shipSize * 0.12, shipSize * 0.08, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#00e5ff';
+            ctx.globalAlpha = engineIntensity * 0.5;
+            ctx.beginPath();
+            ctx.ellipse(0, shipSize * 0.75, shipSize * 0.08, shipSize * 0.05, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+            
+            // Glow effect
+            ctx.shadowColor = actualShipColor;
+            ctx.shadowBlur = 15;
+            ctx.fillStyle = actualShipColor;
+            ctx.beginPath();
+            ctx.moveTo(0, -shipSize * 1.0);
+            ctx.lineTo(-shipSize * 0.35, shipSize * 0.15);
+            ctx.lineTo(-shipSize * 0.25, shipSize * 0.8);
+            ctx.lineTo(shipSize * 0.25, shipSize * 0.8);
+            ctx.lineTo(shipSize * 0.35, shipSize * 0.15);
+            ctx.closePath();
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+        
+        ctx.restore();
+    }
+    
+    // Shoot bullet in WWS logo phase (Phase 0)
+    shootInWWSLogoPhase(e) {
+        console.log('[WWS Logo Phase] shootInWWSLogoPhase called', { e, mouse: this.mouse, cutsceneCanvas: !!this.cutsceneCanvas });
+        
+        // Initialize data if it doesn't exist yet
+        const canvasW = this.cutsceneCanvas ? this.cutsceneCanvas.width : window.innerWidth;
+        const canvasH = this.cutsceneCanvas ? this.cutsceneCanvas.height : window.innerHeight;
+        
+        if (!this.willsWayIntroData) {
+            this.willsWayIntroData = {
+                logoX: canvasW * 0.5,
+                logoY: canvasH * 0.5,
+                logoVx: 0,
+                logoVy: 0,
+                bullets: [],
+                lastShootTime: 0
+            };
+        }
+        
+        const data = this.willsWayIntroData;
+        if (!data.bullets) data.bullets = [];
+        
+        // Throttle shooting
+        const now = Date.now();
+        if (data.lastShootTime && (now - data.lastShootTime) < 100) {
+            console.log('[WWS Logo Phase] Throttled - too soon since last shot');
+            return;
+        }
+        data.lastShootTime = now;
+        
+        // Get target coordinates from event or mouse position - SAME AS PHASE 1
+        // Convert to cutscene canvas coordinates
+        let targetX, targetY;
+        if (e && e.clientX !== undefined && e.clientY !== undefined) {
+            // Convert from screen coordinates to cutscene canvas coordinates
+            const canvasRect = this.cutsceneCanvas.getBoundingClientRect();
+            targetX = e.clientX - canvasRect.left;
+            targetY = e.clientY - canvasRect.top;
+        } else if (this.mouse && this.cutsceneCanvas) {
+            // Mouse position is already relative to main canvas, need to convert
+            const canvasRect = this.cutsceneCanvas.getBoundingClientRect();
+            const mainCanvasRect = this.canvas.getBoundingClientRect();
+            // Convert main canvas mouse position to cutscene canvas coordinates
+            targetX = this.mouse.x + (mainCanvasRect.left - canvasRect.left);
+            targetY = this.mouse.y + (mainCanvasRect.top - canvasRect.top);
+        } else {
+            // Use ship position as fallback (shoot forward)
+            targetX = data.shipX;
+            targetY = data.shipY - 100;
+        }
+        
+        // Calculate bullet direction from ship to target - SAME AS PHASE 1
+        const dx = targetX - data.shipX;
+        const dy = targetY - data.shipY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance < 5) {
+            // If too close, shoot forward in ship's direction
+            const angle = data.shipAngle - Math.PI / 2;
+            const bulletSpeed = 800;
+            const vx = Math.cos(angle) * bulletSpeed;
+            const vy = Math.sin(angle) * bulletSpeed;
+            
+            const bullet = {
+                x: data.shipX,
+                y: data.shipY,
+                vx: vx,
+                vy: vy,
+                lifetime: 2,
+                hasHit: false
+            };
+            
+            data.bullets.push(bullet);
+            this.audio.playSFX('shoot', 0.5);
+            return;
+        }
+        
+        const angle = Math.atan2(dy, dx);
+        const bulletSpeed = 800;
+        const vx = Math.cos(angle) * bulletSpeed;
+        const vy = Math.sin(angle) * bulletSpeed;
+        
+        // Create bullet - SAME AS PHASE 1
+        const bullet = {
+            x: data.shipX,
+            y: data.shipY,
+            vx: vx,
+            vy: vy,
+            lifetime: 2,
+            hasHit: false
+        };
+        
+        data.bullets.push(bullet);
+        
+        // Play shoot sound
+        this.audio.playSFX('shoot', 0.5);
+    }
+    
+    // Check for WWS logo hit
+    checkWWSLogoHit(bullet, data, w, h) {
+        // Logo approximate bounds (centered at logoX, logoY)
+        const logoWidth = 400;
+        const logoHeight = 100;
+        const logoLeft = data.logoX - logoWidth * 0.5;
+        const logoRight = data.logoX + logoWidth * 0.5;
+        const logoTop = data.logoY - logoHeight * 0.5;
+        const logoBottom = data.logoY + logoHeight * 0.5;
+        
+        // Check if bullet is within logo bounds
+        if (bullet.x >= logoLeft && bullet.x <= logoRight &&
+            bullet.y >= logoTop && bullet.y <= logoBottom) {
+            // Mark bullet as hit
+            bullet.hasHit = true;
+            
+            // Store hit information for visual effects
+            const currentTime = this.cutsceneTime || Date.now() * 0.001;
+            data.lastHitTime = currentTime;
+            data.lastHitX = bullet.x;
+            data.lastHitY = bullet.y;
+            
+            // Create impact particles
+            if (!data.hitParticles) {
+                data.hitParticles = [];
+            }
+            
+            // Generate particle burst
+            const particleCount = 20;
+            for (let i = 0; i < particleCount; i++) {
+                const angle = (i / particleCount) * Math.PI * 2;
+                const speed = 50 + Math.random() * 100;
+                const particle = {
+                    x: bullet.x,
+                    y: bullet.y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    size: 3 + Math.random() * 4,
+                    lifetime: 0.5 + Math.random() * 0.3,
+                    maxLifetime: 0.5 + Math.random() * 0.3
+                };
+                data.hitParticles.push(particle);
+            }
+            
+            // Calculate direction from bullet to logo center (logo should move AWAY from bullet)
+            // This makes logo move away from where it was hit
+            const dx = data.logoX - bullet.x;
+            const dy = data.logoY - bullet.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // Determine hit direction for puzzle system
+            let hitDirection = null;
+            if (distance > 0) {
+                const absDx = Math.abs(dx);
+                const absDy = Math.abs(dy);
+                
+                // Determine primary direction (up, down, left, right)
+                // Direction is based on where bullet hits relative to logo center
+                // Logo moves AWAY from bullet, so we track the direction the logo moves
+                // Diagonals ALWAYS count: ANY diagonal with vertical component counts as up/down
+                // Priority: vertical takes precedence - if there's ANY vertical component, count as vertical
+                
+                // Very lenient: if vertical component is at least 30% of horizontal, count as vertical
+                // This ensures diagonals always count as up/down when they have a vertical component
+                // Even shallow diagonals (mostly horizontal) will count as vertical if they have 30% vertical component
+                if (absDy > 0 && absDy >= absDx * 0.3) {
+                    // Vertical hit (including ALL diagonals with ANY vertical component)
+                    // dy > 0 means bullet is ABOVE logo (logoY - bulletY > 0) → logo moves DOWN
+                    // dy < 0 means bullet is BELOW logo (logoY - bulletY < 0) → logo moves UP
+                    hitDirection = dy > 0 ? 'down' : 'up';
+                } else if (absDx > 0) {
+                    // Horizontal hit (only if no significant vertical component - pure horizontal)
+                    // dx > 0 means bullet is LEFT of logo (logoX - bulletX > 0) → logo moves RIGHT
+                    // dx < 0 means bullet is RIGHT of logo (logoX - bulletX < 0) → logo moves LEFT
+                    hitDirection = dx > 0 ? 'right' : 'left';
+                }
+                
+                // Add to sequence (keep last 10 hits to prevent memory issues)
+                if (!data.hitSequence) {
+                    data.hitSequence = [];
+                }
+                data.hitSequence.push(hitDirection);
+                if (data.hitSequence.length > 10) {
+                    data.hitSequence.shift(); // Remove oldest
+                }
+                
+                // Apply velocity in direction AWAY from bullet (normalized and scaled)
+                // Use bullet velocity to determine push strength
+                const bulletSpeed = Math.sqrt(bullet.vx * bullet.vx + bullet.vy * bullet.vy);
+                const force = Math.min(800, bulletSpeed * 0.8); // Increased force for more responsive movement
+                const normalizedDx = dx / distance;
+                const normalizedDy = dy / distance;
+                data.logoVx += normalizedDx * force;
+                data.logoVy += normalizedDy * force;
+                
+                console.log('[WWS Logo Phase] Logo hit!', { 
+                    bulletPos: { x: bullet.x, y: bullet.y },
+                    logoPos: { x: data.logoX, y: data.logoY },
+                    velocity: { vx: data.logoVx, vy: data.logoVy },
+                    force: force,
+                    direction: { dx: normalizedDx, dy: normalizedDy },
+                    hitDirection: hitDirection,
+                    sequence: data.hitSequence
+                });
+            }
+            
+            // Play hit sound
+            this.audio.playSFX('hit', 0.5);
+            
+            // Remove bullet
+            bullet.lifetime = 0;
+        }
+    }
+    
+    // Check puzzle sequences in Phase 0
+    checkPuzzleSequences(data) {
+        if (!data.hitSequence || data.hitSequence.length === 0) {
+            return;
+        }
+        
+        // Define all puzzle sequences (must be solved in order)
+        const puzzles = [
+            // Puzzle 1-2: Original puzzles
+            { id: 1, sequence: ['down', 'down', 'up'], timeLimit: 20, message: 'Puzzle Solved!', requires: [] },
+            { id: 2, sequence: ['down', 'up', 'left', 'right'], timeLimit: 30, message: '2nd Puzzle Solved!', requires: [1] },
+            
+            // Puzzle 3-32: 30 additional sequences (each requires the previous puzzle)
+            { id: 3, sequence: ['up', 'up', 'down', 'down'], timeLimit: 25, message: '3rd Puzzle Solved!', requires: [2] },
+            { id: 4, sequence: ['left', 'right', 'left', 'right'], timeLimit: 28, message: '4th Puzzle Solved!', requires: [3] },
+            { id: 5, sequence: ['up', 'down', 'up', 'down', 'up'], timeLimit: 32, message: '5th Puzzle Solved!', requires: [4] },
+            { id: 6, sequence: ['right', 'right', 'left', 'left'], timeLimit: 30, message: '6th Puzzle Solved!', requires: [5] },
+            { id: 7, sequence: ['down', 'left', 'up', 'right'], timeLimit: 35, message: '7th Puzzle Solved!', requires: [6] },
+            { id: 8, sequence: ['up', 'left', 'down', 'right'], timeLimit: 35, message: '8th Puzzle Solved!', requires: [7] },
+            { id: 9, sequence: ['left', 'up', 'right', 'down'], timeLimit: 35, message: '9th Puzzle Solved!', requires: [8] },
+            { id: 10, sequence: ['right', 'down', 'left', 'up'], timeLimit: 35, message: '10th Puzzle Solved!', requires: [9] },
+            { id: 11, sequence: ['up', 'up', 'up', 'down'], timeLimit: 30, message: '11th Puzzle Solved!', requires: [10] },
+            { id: 12, sequence: ['down', 'down', 'down', 'up'], timeLimit: 30, message: '12th Puzzle Solved!', requires: [11] },
+            { id: 13, sequence: ['left', 'left', 'right', 'right'], timeLimit: 30, message: '13th Puzzle Solved!', requires: [12] },
+            { id: 14, sequence: ['right', 'right', 'left', 'left'], timeLimit: 30, message: '14th Puzzle Solved!', requires: [13] },
+            { id: 15, sequence: ['up', 'right', 'down', 'left', 'up'], timeLimit: 38, message: '15th Puzzle Solved!', requires: [14] },
+            { id: 16, sequence: ['down', 'left', 'up', 'right', 'down'], timeLimit: 38, message: '16th Puzzle Solved!', requires: [15] },
+            { id: 17, sequence: ['left', 'up', 'right', 'down', 'left'], timeLimit: 38, message: '17th Puzzle Solved!', requires: [16] },
+            { id: 18, sequence: ['right', 'down', 'left', 'up', 'right'], timeLimit: 38, message: '18th Puzzle Solved!', requires: [17] },
+            { id: 19, sequence: ['up', 'down', 'left', 'right', 'up'], timeLimit: 40, message: '19th Puzzle Solved!', requires: [18] },
+            { id: 20, sequence: ['down', 'up', 'right', 'left', 'down'], timeLimit: 40, message: '20th Puzzle Solved!', requires: [19] },
+            { id: 21, sequence: ['left', 'right', 'up', 'down', 'left'], timeLimit: 40, message: '21st Puzzle Solved!', requires: [20] },
+            { id: 22, sequence: ['right', 'left', 'down', 'up', 'right'], timeLimit: 40, message: '22nd Puzzle Solved!', requires: [21] },
+            { id: 23, sequence: ['up', 'up', 'left', 'left', 'down', 'down'], timeLimit: 42, message: '23rd Puzzle Solved!', requires: [22] },
+            { id: 24, sequence: ['down', 'down', 'right', 'right', 'up', 'up'], timeLimit: 42, message: '24th Puzzle Solved!', requires: [23] },
+            { id: 25, sequence: ['left', 'up', 'up', 'right', 'down', 'down'], timeLimit: 42, message: '25th Puzzle Solved!', requires: [24] },
+            { id: 26, sequence: ['right', 'down', 'down', 'left', 'up', 'up'], timeLimit: 42, message: '26th Puzzle Solved!', requires: [25] },
+            { id: 27, sequence: ['up', 'left', 'down', 'right', 'up', 'left'], timeLimit: 45, message: '27th Puzzle Solved!', requires: [26] },
+            { id: 28, sequence: ['down', 'right', 'up', 'left', 'down', 'right'], timeLimit: 45, message: '28th Puzzle Solved!', requires: [27] },
+            { id: 29, sequence: ['left', 'down', 'right', 'up', 'left', 'down'], timeLimit: 45, message: '29th Puzzle Solved!', requires: [28] },
+            { id: 30, sequence: ['right', 'up', 'left', 'down', 'right', 'up'], timeLimit: 45, message: '30th Puzzle Solved!', requires: [29] },
+            { id: 31, sequence: ['up', 'right', 'right', 'down', 'left', 'left'], timeLimit: 45, message: '31st Puzzle Solved!', requires: [30] },
+            { id: 32, sequence: ['down', 'left', 'left', 'up', 'right', 'right'], timeLimit: 45, message: '32nd Puzzle Solved!', requires: [31] }
+        ];
+        
+        // Check each puzzle
+        for (const puzzle of puzzles) {
+            // Skip if already solved
+            if (data.puzzleSolved && data.puzzleSolved[puzzle.id]) {
+                continue;
+            }
+            
+            // Check if requirements are met
+            let requirementsMet = true;
+            if (puzzle.requires && puzzle.requires.length > 0) {
+                for (const reqId of puzzle.requires) {
+                    if (!data.puzzleSolved || !data.puzzleSolved[reqId]) {
+                        requirementsMet = false;
+                        break;
+                    }
+                }
+            }
+            
+            if (!requirementsMet) {
+                continue;
+            }
+            
+            // Check if sequence matches
+            if (this.checkSequenceMatch(data.hitSequence, puzzle.sequence)) {
+                // Mark puzzle as solved
+                if (!data.puzzleSolved) {
+                    data.puzzleSolved = {};
+                }
+                data.puzzleSolved[puzzle.id] = true;
+                data.totalPuzzlesSolved = (data.totalPuzzlesSolved || 0) + 1;
+                
+                // Update time limit (use maximum of current and new limit)
+                data.puzzleTimeLimit = Math.max(data.puzzleTimeLimit || 8, puzzle.timeLimit);
+                
+                // Reset timer when puzzle is solved
+                this.cutsceneTime = 0;
+                
+                // Show message
+                data.puzzleMessage = puzzle.message;
+                data.puzzleMessageTime = this.cutsceneTime;
+                
+                console.log(`[Puzzle] Puzzle ${puzzle.id} solved! Time reset and extended to ${puzzle.timeLimit} seconds`);
+                
+                // Clear sequence to allow next puzzle
+                data.hitSequence = [];
+                break; // Only solve one puzzle per check
+            }
+        }
+    }
+    
+    // Check if the end of hitSequence matches the puzzle sequence
+    checkSequenceMatch(hitSequence, puzzleSequence) {
+        if (hitSequence.length < puzzleSequence.length) {
+            return false;
+        }
+        
+        // Check if the last N elements match the puzzle sequence
+        const startIndex = hitSequence.length - puzzleSequence.length;
+        for (let i = 0; i < puzzleSequence.length; i++) {
+            if (hitSequence[startIndex + i] !== puzzleSequence[i]) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    // Shoot bullet in SpaceBell interactive phase
+    shootInSpaceBellPhase(e) {
+        if (!this.willsWayIntroData) return;
+        
+        const data = this.willsWayIntroData;
+        
+        // Get target coordinates from event or mouse position
+        // Convert to cutscene canvas coordinates
+        let targetX, targetY;
+        if (e && e.clientX !== undefined && e.clientY !== undefined) {
+            // Convert from screen coordinates to cutscene canvas coordinates
+            const canvasRect = this.cutsceneCanvas.getBoundingClientRect();
+            targetX = e.clientX - canvasRect.left;
+            targetY = e.clientY - canvasRect.top;
+        } else if (this.mouse && this.cutsceneCanvas) {
+            // Mouse position is already relative to main canvas, need to convert
+            const canvasRect = this.cutsceneCanvas.getBoundingClientRect();
+            const mainCanvasRect = this.canvas.getBoundingClientRect();
+            // Convert main canvas mouse position to cutscene canvas coordinates
+            targetX = this.mouse.x + (mainCanvasRect.left - canvasRect.left);
+            targetY = this.mouse.y + (mainCanvasRect.top - canvasRect.top);
+        } else {
+            // Use ship position as fallback (shoot forward)
+            targetX = data.shipX;
+            targetY = data.shipY - 100;
+        }
+        
+        // Throttle shooting (0.1 second cooldown for better responsiveness)
+        const now = Date.now();
+        if (data.lastShootTime && (now - data.lastShootTime) < 100) {
+            return; // Too soon since last shot
+        }
+        data.lastShootTime = now;
+        
+        // Calculate bullet direction from ship to target
+        const dx = targetX - data.shipX;
+        const dy = targetY - data.shipY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance < 5) {
+            // If too close, shoot forward (up)
+            const angle = data.shipAngle - Math.PI / 2;
+            const bulletSpeed = 800;
+            const vx = Math.cos(angle) * bulletSpeed;
+            const vy = Math.sin(angle) * bulletSpeed;
+            
+            const bullet = {
+                x: data.shipX,
+                y: data.shipY,
+                vx: vx,
+                vy: vy,
+                lifetime: 2,
+                hasHit: false
+            };
+            
+            data.bullets.push(bullet);
+            this.audio.playSFX('shoot', 0.5);
+            return;
+        }
+        
+        const angle = Math.atan2(dy, dx);
+        const bulletSpeed = 800;
+        const vx = Math.cos(angle) * bulletSpeed;
+        const vy = Math.sin(angle) * bulletSpeed;
+        
+        // Create bullet
+        const bullet = {
+            x: data.shipX,
+            y: data.shipY,
+            vx: vx,
+            vy: vy,
+            lifetime: 2,
+            hasHit: false
+        };
+        
+        data.bullets.push(bullet);
+        
+        // Play shoot sound
+        this.audio.playSFX('shoot', 0.5);
+    }
+    
+    // Intro cutscene: fast overview before the opening story
+    drawIntroCutsceneFastOverview(ctx, w, h) {
+        // Positions
         const einsteinX = w * 0.28;
         const einsteinY = h * 0.6;
         const shipX = w * 0.74;
         const shipY = h * 0.64;
         
+        // Draw bubble function
         const drawBubble = (text, x, y, width) => {
             ctx.save();
             ctx.globalAlpha = 1; // Prevent inherited alpha from dimming text
@@ -27722,42 +33225,150 @@ class SpaceShooterGame {
         if (this.cutscenePhase === 0) {
             drawBubble('Welcome, pilot! We prepped your ship for the Bell mission.\nThis intro covers your meters, systems, and settings.', w * 0.5, h * 0.22, Math.min(840, w * 0.88));
         } else if (this.cutscenePhase === 1) {
-            drawBubble('Core meters:\n- Health & Shield: repairs/shields keep you alive\n- Hunger: drains over time—eat meals/energy to avoid death\n- Speed & Fire Rate: improve via upgrades and gear', w * 0.5, h * 0.24, Math.min(960, w * 0.9));
+            drawBubble('Core meters:\n- Health & Shield: repairs/shields keep you alive\n- Hunger: drains over timeâ€”eat meals/energy to avoid death\n- Speed & Fire Rate: improve via upgrades and gear', w * 0.5, h * 0.24, Math.min(960, w * 0.9));
         } else if (this.cutscenePhase === 2) {
-            drawBubble('Systems & crafting:\n- Materials drop each level; craft ships, weapons, upgrades\n- Repair decay: gear loses durability—repair or replace\n- Food system: cook meals to restore hunger/methane boosts\n- RPG stats: crit, damage, regen, drop rates from upgrades', w * 0.5, h * 0.26, Math.min(1000, w * 0.92));
+            drawBubble('Systems & crafting:\n- Materials drop each level; craft ships, weapons, upgrades\n- Repair decay: gear loses durabilityâ€”repair or replace\n- Food system: cook meals to restore hunger/methane boosts\n- RPG stats: crit, damage, regen, drop rates from upgrades', w * 0.5, h * 0.26, Math.min(1000, w * 0.92));
         } else if (this.cutscenePhase === 3) {
             drawBubble('Adjust graphics and controls in Settings if needed.\nPress ESC to begin the Bell story cutscene and start the mission.', w * 0.5, h * 0.26, Math.min(820, w * 0.85));
         }
         ctx.restore(); // restore initial state for stability
     }
     
-    // Intro cutscene: quick overview before the main story
+    // Intro cutscene: enhanced tutorial intro with amazing visuals
     drawIntroCutscene(ctx, w, h) {
         // Reset transform/blending to avoid inherited alpha flicker (fullscreen safety)
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.globalAlpha = 1;
         ctx.globalCompositeOperation = 'source-over';
-        // Starfield (stable alpha to prevent fullscreen flicker)
-        ctx.save();
-        ctx.fillStyle = '#000';
-        ctx.globalAlpha = 1;
-        ctx.fillRect(0, 0, w, h);
-        ctx.fillStyle = 'rgba(79,195,247,0.6)'; // slightly dimmer base
-        ctx.globalAlpha = 0.9; // fixed alpha
-        for (let i = 0; i < 160; i++) {
-            const x = (i * 89 + Math.sin(this.cutsceneTime * 0.6 + i) * 50) % w;
-            const y = (i * 57 + Math.cos(this.cutsceneTime * 0.7 + i) * 40) % h;
-            const s = 1 + (i % 3) * 0.6;
-            ctx.fillRect(x, y, s, s);
-        }
-        ctx.globalAlpha = 1;
-        ctx.restore();
         
-        // Vignette
-        const vig = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.65);
+        // REALISTIC BACKGROUND: Immersive space environment (no grey backdrop)
+        const time = this.cutsceneTime || 0;
+        
+        // Realistic deep space gradient - rich colors, no grey
+        const bgGradient = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 1.5);
+        bgGradient.addColorStop(0, '#0d0b1a'); // Deep space blue-purple center
+        bgGradient.addColorStop(0.15, '#0f0d1f'); // Rich dark blue
+        bgGradient.addColorStop(0.3, '#1a1528'); // Deep purple-blue
+        bgGradient.addColorStop(0.5, '#1f1a2e'); // Rich dark purple
+        bgGradient.addColorStop(0.7, '#151020'); // Deep space
+        bgGradient.addColorStop(0.9, '#0a0515'); // Very dark blue
+        bgGradient.addColorStop(1, '#000008'); // Deepest space (almost black but with blue hint)
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, w, h);
+        
+        // Realistic nebula clouds (colorful, organic)
+        for (let nebula = 0; nebula < 3; nebula++) {
+            const nebulaX = w * (0.2 + nebula * 0.3) + Math.sin(time * 0.03 + nebula) * 80;
+            const nebulaY = h * (0.25 + nebula * 0.25) + Math.cos(time * 0.04 + nebula) * 60;
+            const nebulaSize = 300 + Math.sin(time * 0.2 + nebula) * 50;
+            const nebulaAlpha = 0.15 + Math.sin(time * 0.3 + nebula) * 0.1;
+            
+            const nebulaGradient = ctx.createRadialGradient(nebulaX, nebulaY, 0, nebulaX, nebulaY, nebulaSize);
+            if (nebula === 0) {
+                nebulaGradient.addColorStop(0, `rgba(79, 195, 247, ${nebulaAlpha})`); // Blue nebula
+                nebulaGradient.addColorStop(0.5, `rgba(156, 39, 176, ${nebulaAlpha * 0.7})`);
+                nebulaGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            } else if (nebula === 1) {
+                nebulaGradient.addColorStop(0, `rgba(156, 39, 176, ${nebulaAlpha})`); // Purple nebula
+                nebulaGradient.addColorStop(0.5, `rgba(79, 195, 247, ${nebulaAlpha * 0.7})`);
+                nebulaGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            } else {
+                nebulaGradient.addColorStop(0, `rgba(33, 150, 243, ${nebulaAlpha})`); // Dark blue nebula
+                nebulaGradient.addColorStop(0.5, `rgba(79, 195, 247, ${nebulaAlpha * 0.7})`);
+                nebulaGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            }
+            ctx.fillStyle = nebulaGradient;
+            ctx.fillRect(0, 0, w, h);
+        }
+        
+        // Realistic quantum energy glow (subtle, natural)
+        const quantumPulse = 0.4 + Math.sin(time * 0.6) * 0.2;
+        const quantumOverlay = ctx.createRadialGradient(w * 0.3, h * 0.3, 0, w * 0.7, h * 0.7, Math.max(w, h) * 0.9);
+        quantumOverlay.addColorStop(0, `rgba(79, 195, 247, ${0.12 * quantumPulse})`);
+        quantumOverlay.addColorStop(0.4, `rgba(156, 39, 176, ${0.08 * quantumPulse})`);
+        quantumOverlay.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = quantumOverlay;
+        ctx.fillRect(0, 0, w, h);
+        
+        // Enhanced starfield with twinkling
+        ctx.fillStyle = 'rgba(79, 195, 247, 0.8)';
+        for (let i = 0; i < 200; i++) {
+            const seed = i * 137.5;
+            const x = (seed) % w;
+            const y = (seed * 1.618) % h;
+            const twinkle = Math.sin(time * 0.8 + i * 0.1) * 0.5 + 0.5;
+            const size = (i % 3) + 0.5;
+            const alpha = 0.4 + twinkle * 0.6;
+            
+            ctx.fillStyle = `rgba(79, 195, 247, ${alpha})`;
+            ctx.shadowBlur = size * 3;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.8)';
+            ctx.beginPath();
+            ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Quantum particles orbiting (like molecule energy flows)
+        for (let center = 0; center < 4; center++) {
+            const centerX = w * (0.2 + center * 0.2);
+            const centerY = h * (0.3 + (center % 2) * 0.3);
+            
+            for (let i = 0; i < 15; i++) {
+                const angle = time * 0.4 + i * 0.4 + center;
+                const radius = 60 + (i % 4) * 20;
+                const x = centerX + Math.cos(angle) * radius;
+                const y = centerY + Math.sin(angle) * radius;
+                const pulse = Math.sin(time * 2 + i * 0.2) * 0.4 + 0.6;
+                const particleSize = 2 + Math.sin(time * 1.5 + i) * 0.8;
+                
+                const colorType = center % 3;
+                let particleColor;
+                if (colorType === 0) {
+                    particleColor = `rgba(79, 195, 247, ${0.7 * pulse})`; // Blue
+                } else if (colorType === 1) {
+                    particleColor = `rgba(156, 39, 176, ${0.6 * pulse})`; // Purple
+                } else {
+                    particleColor = `rgba(33, 150, 243, ${0.7 * pulse})`; // Dark blue
+                }
+                
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = particleColor;
+                ctx.fillStyle = particleColor;
+                ctx.beginPath();
+                ctx.arc(x, y, particleSize, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+        }
+        
+        // Energy connection lines (quantum entanglement visualization)
+        ctx.strokeStyle = 'rgba(79, 195, 247, 0.15)';
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 8; i++) {
+            const angle1 = time * 0.1 + i * 0.8;
+            const angle2 = time * 0.1 + (i + 1.5) * 0.8;
+            const radius = 150 + (i % 3) * 40;
+            const x1 = w * 0.5 + Math.cos(angle1) * radius;
+            const y1 = h * 0.5 + Math.sin(angle1) * radius;
+            const x2 = w * 0.5 + Math.cos(angle2) * radius;
+            const y2 = h * 0.5 + Math.sin(angle2) * radius;
+            
+            ctx.shadowBlur = 5;
+            ctx.shadowColor = 'rgba(79, 195, 247, 0.3)';
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+        
+        // Subtle vignette for focus
+        const vig = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.7);
         vig.addColorStop(0, 'rgba(0,0,0,0)');
-        vig.addColorStop(1, 'rgba(0,0,0,0.65)');
+        vig.addColorStop(0.7, 'rgba(0,0,0,0.3)');
+        vig.addColorStop(1, 'rgba(0,0,0,0.6)');
         ctx.fillStyle = vig;
         ctx.fillRect(0, 0, w, h);
         
@@ -27767,51 +33378,193 @@ class SpaceShooterGame {
         const shipX = w * 0.74;
         const shipY = h * 0.64;
         
-        const drawBubble = (text, x, y, width) => {
+        const animTime = time;
+        
+        // Phase-based fade-in animations (smooth transitions)
+        const phaseFadeDuration = 1.5; // seconds to fade in
+        const einsteinFadeIn = Math.min(1.0, animTime / phaseFadeDuration);
+        const shipFadeIn = Math.min(1.0, animTime / phaseFadeDuration);
+        
+        // Realistic breathing and natural movement
+        const einsteinBaseAlpha = 0.88 + Math.sin(animTime * 0.7) * 0.08;
+        const einsteinAlpha = einsteinBaseAlpha * einsteinFadeIn;
+        
+        // Smooth, natural floating (realistic physics)
+        const einsteinFloat = Math.sin(animTime * 0.5) * 2.5;
+        const einsteinSway = Math.sin(animTime * 0.3) * 1; // Subtle side-to-side
+        const einsteinScale = 1.05 + Math.sin(animTime * 0.4) * 0.015;
+        
+        // Draw Einstein character with realistic animations
+        this.drawEinsteinCharacter(ctx, einsteinX + einsteinSway, einsteinY + einsteinFloat, einsteinScale, einsteinAlpha, animTime);
+        
+        // Ship animations (realistic floating and gentle rotation)
+        const shipFloat = Math.sin(animTime * 0.6 + Math.PI) * 1.8;
+        const shipSway = Math.sin(animTime * 0.25) * 0.8; // Gentle side movement
+        const shipRotation = Math.sin(animTime * 0.2) * 0.03; // Very subtle rotation
+        const shipScale = 1.0 + Math.sin(animTime * 0.3) * 0.02;
+        const shipAlpha = 0.92 * shipFadeIn;
+        
+        // Draw ship with enhanced animations
+        ctx.save();
+        ctx.translate(shipX + shipSway, shipY + shipFloat);
+        ctx.rotate(shipRotation);
+        this.drawEinsteinShip(ctx, 0, 0, shipScale, shipAlpha, animTime);
+        ctx.restore();
+        
+        // Text boxes with stunning animated design
+        const drawStunningTextBox = (text, x, y, width, textColor, borderColor, glowColor, position = 'center') => {
             ctx.save();
-            ctx.fillStyle = 'rgba(0,0,0,0.65)';
-            ctx.strokeStyle = '#4fc3f7';
-            ctx.lineWidth = 3;
-            ctx.font = '24px "Segoe UI", sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
+            const textFadeDuration = 1.2; // seconds to fade in text
+            const textFadeIn = Math.min(1.0, animTime / textFadeDuration);
+            const textScale = 0.95 + textFadeIn * 0.05; // Scale animation
+            const textPulse = 0.98 + Math.sin(animTime * 2) * 0.02; // Subtle pulse
+            const fadeAlpha = 0.8 + textFadeIn * 0.2;
+            ctx.globalAlpha = fadeAlpha;
+            
+            // Animated scale and position
+            const scale = textScale * textPulse;
+            const offsetX = (1 - scale) * width * 0.5;
+            const offsetY = (1 - scale) * (y - h * 0.5);
+            const finalX = x - offsetX;
+            const finalY = y - offsetY;
             
             const lines = text.split('\n');
-            const lineHeight = 28;
-            const padding = 32;
+            const lineHeight = 32;
+            const padding = 40;
             const height = lines.length * lineHeight + padding;
-            const top = y - height * 0.5;
+            const top = finalY - height * 0.5;
+            const left = finalX - width * 0.5;
             
+            // Outer glow (animated) - extract RGB from glowColor and create proper rgba strings
+            const glowPulse = 0.6 + Math.sin(animTime * 3) * 0.3;
+            // Extract RGB values from glowColor (format: 'rgba(r, g, b, a)')
+            const rgbMatch = glowColor.match(/rgba\((\d+),\s*(\d+),\s*(\d+)/);
+            let glowR = 79, glowG = 195, glowB = 247; // Default blue
+            if (rgbMatch) {
+                glowR = parseInt(rgbMatch[1]);
+                glowG = parseInt(rgbMatch[2]);
+                glowB = parseInt(rgbMatch[3]);
+            }
+            const glowGradient = ctx.createRadialGradient(finalX, finalY, 0, finalX, finalY, width * 0.8);
+            glowGradient.addColorStop(0, `rgba(${glowR}, ${glowG}, ${glowB}, ${0.4 * glowPulse})`);
+            glowGradient.addColorStop(0.5, `rgba(${glowR}, ${glowG}, ${glowB}, ${0.2 * glowPulse})`);
+            glowGradient.addColorStop(1, `rgba(${glowR}, ${glowG}, ${glowB}, 0)`);
+            ctx.fillStyle = glowGradient;
+            ctx.fillRect(left - 20, top - 20, width + 40, height + 40);
+            
+            // Background with gradient (stunning)
+            const bgGradient = ctx.createLinearGradient(left, top, left, top + height);
+            bgGradient.addColorStop(0, 'rgba(10, 10, 20, 0.95)');
+            bgGradient.addColorStop(0.3, 'rgba(15, 15, 30, 0.92)');
+            bgGradient.addColorStop(0.7, 'rgba(20, 20, 40, 0.95)');
+            bgGradient.addColorStop(1, 'rgba(10, 10, 25, 0.98)');
+            ctx.fillStyle = bgGradient;
+            ctx.shadowBlur = 30;
+            ctx.shadowColor = glowColor;
             ctx.beginPath();
-            ctx.roundRect(x - width * 0.5, top, width, height, 14);
+            ctx.roundRect(left, top, width, height, 20);
             ctx.fill();
-            ctx.stroke();
+            ctx.shadowBlur = 0;
             
-            // Set text color and draw
-            ctx.fillStyle = '#e0f7ff';
-            const startY = y - ((lines.length - 1) * lineHeight) * 0.5;
-            lines.forEach((line, i) => ctx.fillText(line, x, startY + i * lineHeight));
+            // Animated border (pulsing)
+            const borderPulse = 0.7 + Math.sin(animTime * 4) * 0.3;
+            ctx.strokeStyle = borderColor;
+            ctx.lineWidth = 4;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = borderColor;
+            ctx.beginPath();
+            ctx.roundRect(left, top, width, height, 20);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            
+            // Inner highlight (animated)
+            const highlightGradient = ctx.createLinearGradient(left, top, left, top + height * 0.3);
+            highlightGradient.addColorStop(0, 'rgba(255, 255, 255, 0.15)');
+            highlightGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = highlightGradient;
+            ctx.beginPath();
+            ctx.roundRect(left + 2, top + 2, width - 4, height * 0.3, 18);
+            ctx.fill();
+            
+            // Text with color
+            ctx.fillStyle = textColor;
+            ctx.font = 'bold 26px "Segoe UI", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+            const startY = finalY - ((lines.length - 1) * lineHeight) * 0.5;
+            lines.forEach((line, i) => {
+                // Individual line animation
+                const lineOffset = Math.sin(animTime * 2 + i * 0.3) * 2;
+                ctx.fillText(line, finalX, startY + i * lineHeight + lineOffset);
+            });
+            ctx.shadowBlur = 0;
+            
+            // Sparkle effects (animated)
+            for (let sparkle = 0; sparkle < 8; sparkle++) {
+                const sparkleAngle = (animTime * 2 + sparkle * 0.8) % (Math.PI * 2);
+                const sparkleRadius = width * 0.45;
+                const sparkleX = finalX + Math.cos(sparkleAngle) * sparkleRadius;
+                const sparkleY = finalY + Math.sin(sparkleAngle) * sparkleRadius;
+                const sparkleSize = 2 + Math.sin(animTime * 5 + sparkle) * 1;
+                const sparkleAlpha = Math.sin(animTime * 4 + sparkle) * 0.5 + 0.5;
+                
+                ctx.fillStyle = `rgba(255, 255, 255, ${sparkleAlpha * 0.8})`;
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = glowColor;
+                ctx.beginPath();
+                ctx.arc(sparkleX, sparkleY, sparkleSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.shadowBlur = 0;
+            
             ctx.restore();
         };
         
-        // Characters
-        const einsteinAlpha = 0.8 + Math.sin(this.cutsceneTime * 0.8) * 0.1;
-        this.drawEinsteinCharacter(ctx, einsteinX, einsteinY, 1.05, einsteinAlpha, this.cutsceneTime);
-        ctx.save();
-        ctx.translate(shipX, shipY);
-        ctx.scale(1.15, 1.15);
-        this.drawEinsteinShip(ctx, 0, 0, 1, 0.9, this.cutsceneTime);
-        ctx.restore();
-        
-        // Phase text
+        // Phase 0: Welcome message (top-center, blue theme)
         if (this.cutscenePhase === 0) {
-            drawBubble('Welcome, pilot! We prepped your ship for the Bell mission.\nThis intro covers your meters, systems, and settings.', w * 0.5, h * 0.22, Math.min(840, w * 0.88));
-        } else if (this.cutscenePhase === 1) {
-            drawBubble('Core meters:\n- Health & Shield: repairs/shields keep you alive\n- Hunger: drains over time—eat meals/energy to avoid death\n- Speed & Fire Rate: improve via upgrades and gear', w * 0.5, h * 0.24, Math.min(960, w * 0.9));
-        } else if (this.cutscenePhase === 2) {
-            drawBubble('Systems & crafting:\n- Materials drop each level; craft ships, weapons, upgrades\n- Repair decay: gear loses durability—repair or replace\n- Food system: cook meals to restore hunger/methane boosts\n- RPG stats: crit, damage, regen, drop rates from upgrades', w * 0.5, h * 0.26, Math.min(1000, w * 0.92));
-        } else if (this.cutscenePhase === 3) {
-            drawBubble('Adjust graphics and controls in Settings if needed.\nPress ESC to begin the Bell story cutscene and start the mission.', w * 0.5, h * 0.26, Math.min(820, w * 0.85));
+            drawStunningTextBox(
+                'Welcome, pilot! We prepped your ship for the Bell mission.\nThis intro covers your meters, systems, and settings.',
+                w * 0.5, h * 0.18, Math.min(900, w * 0.9),
+                '#4fc3f7', // Light blue text
+                '#4fc3f7', // Blue border
+                'rgba(79, 195, 247, 0.8)', // Blue glow
+                'top'
+            );
+        } 
+        // Phase 1: Core meters (top-right, green theme)
+        else if (this.cutscenePhase === 1) {
+            drawStunningTextBox(
+                'Core meters:\n- Health & Shield: repairs/shields keep you alive\n- Hunger: drains over time - eat meals/energy to avoid death\n- Speed & Fire Rate: improve via upgrades and gear',
+                w * 0.75, h * 0.25, Math.min(1000, w * 0.85),
+                '#66ff99', // Green text
+                '#66ff99', // Green border
+                'rgba(102, 255, 153, 0.8)', // Green glow
+                'top-right'
+            );
+        } 
+        // Phase 2: Systems & crafting (bottom-left, purple theme)
+        else if (this.cutscenePhase === 2) {
+            drawStunningTextBox(
+                'Systems & crafting:\n- Materials drop each level; craft ships, weapons, upgrades\n- Repair decay: gear loses durability - repair or replace\n- Food system: cook meals to restore hunger/methane boosts\n- RPG stats: crit, damage, regen, drop rates from upgrades',
+                w * 0.25, h * 0.75, Math.min(1100, w * 0.88),
+                '#ff6bff', // Magenta text
+                '#ff6bff', // Magenta border
+                'rgba(255, 107, 255, 0.8)', // Magenta glow
+                'bottom-left'
+            );
+        } 
+        // Phase 3: Settings (bottom-center, gold theme)
+        else if (this.cutscenePhase === 3) {
+            drawStunningTextBox(
+                'Adjust graphics and controls in Settings if needed.\nPress ESC to begin the Bell story cutscene and start the mission.',
+                w * 0.5, h * 0.82, Math.min(920, w * 0.88),
+                '#ffd700', // Gold text
+                '#ffd700', // Gold border
+                'rgba(255, 215, 0, 0.8)', // Gold glow
+                'bottom'
+            );
         }
         ctx.restore(); // restore initial state for stability
     }
@@ -34898,10 +40651,10 @@ class SpaceShooterGame {
             const largeSymbols = [
                 { sym: 'ψ', x: w * 0.15, y: h * 0.2, color: 'rgba(79, 195, 247, 0.25)' },
                 { sym: 'E', x: w * 0.1, y: h * 0.7, color: 'rgba(79, 195, 247, 0.2)' },
-                { sym: '∫', x: w * 0.3, y: h * 0.3, color: 'rgba(79, 195, 247, 0.2)' },
+                { sym: 'âˆ«', x: w * 0.3, y: h * 0.3, color: 'rgba(79, 195, 247, 0.2)' },
                 { sym: 'P', x: w * 0.85, y: h * 0.25, color: 'rgba(255, 68, 68, 0.2)' },
-                { sym: '⟨', x: w * 0.9, y: h * 0.7, color: 'rgba(255, 68, 68, 0.2)' },
-                { sym: '∑', x: w * 0.7, y: h * 0.35, color: 'rgba(255, 68, 68, 0.2)' }
+                { sym: 'âŸ¨', x: w * 0.9, y: h * 0.7, color: 'rgba(255, 68, 68, 0.2)' },
+                { sym: 'âˆ‘', x: w * 0.7, y: h * 0.35, color: 'rgba(255, 68, 68, 0.2)' }
             ];
             
             for (let i = 0; i < largeSymbols.length; i++) {
@@ -34997,7 +40750,7 @@ class SpaceShooterGame {
                         'P(B) = |ψ_B(x,t)|²',
                         '',
                         'Bell requires:',
-                        'P(A,B) ≠ P(A)·P(B)',
+                        'P(A,B) â‰  P(A)·P(B)',
                         '',
                         'But if A or B alone:',
                         '→ No correlation',
@@ -35270,10 +41023,10 @@ class SpaceShooterGame {
             const largeSymbols = [
                 { sym: 'ψ', x: w * 0.15, y: h * 0.2, color: 'rgba(79, 195, 247, 0.3)' },
                 { sym: 'E', x: w * 0.1, y: h * 0.7, color: 'rgba(79, 195, 247, 0.25)' },
-                { sym: '∫', x: w * 0.3, y: h * 0.3, color: 'rgba(79, 195, 247, 0.25)' },
+                { sym: 'âˆ«', x: w * 0.3, y: h * 0.3, color: 'rgba(79, 195, 247, 0.25)' },
                 { sym: 'P', x: w * 0.85, y: h * 0.25, color: `rgba(255, 68, 68, ${0.25 * bellFadePhase1})` },
-                { sym: '⟨', x: w * 0.9, y: h * 0.7, color: `rgba(255, 68, 68, ${0.25 * bellFadePhase1})` },
-                { sym: '∑', x: w * 0.7, y: h * 0.35, color: `rgba(255, 68, 68, ${0.25 * bellFadePhase1})` }
+                { sym: 'âŸ¨', x: w * 0.9, y: h * 0.7, color: `rgba(255, 68, 68, ${0.25 * bellFadePhase1})` },
+                { sym: 'âˆ‘', x: w * 0.7, y: h * 0.35, color: `rgba(255, 68, 68, ${0.25 * bellFadePhase1})` }
             ];
             
             for (let i = 0; i < largeSymbols.length; i++) {
@@ -35583,7 +41336,7 @@ class SpaceShooterGame {
                 { sym: 'ψ', x: w * 0.15, y: h * 0.2, color: 'rgba(255, 170, 68, 0.3)' },
                 { sym: 'A', x: w * 0.1, y: h * 0.7, color: 'rgba(255, 170, 68, 0.25)' },
                 { sym: 'B', x: w * 0.3, y: h * 0.3, color: 'rgba(255, 170, 68, 0.25)' },
-                { sym: '∫', x: w * 0.85, y: h * 0.25, color: 'rgba(255, 170, 68, 0.25)' },
+                { sym: 'âˆ«', x: w * 0.85, y: h * 0.25, color: 'rgba(255, 170, 68, 0.25)' },
                 { sym: '|', x: w * 0.9, y: h * 0.7, color: 'rgba(255, 170, 68, 0.25)' },
                 { sym: '²', x: w * 0.7, y: h * 0.35, color: 'rgba(255, 170, 68, 0.25)' }
             ];
@@ -35685,7 +41438,7 @@ class SpaceShooterGame {
                 'P(A,B) = P(A)·P(B)',
                 '',
                 'Bell requires:',
-                'P(A,B) ≠ P(A)·P(B)',
+                'P(A,B) â‰  P(A)·P(B)',
                 '',
                 '→ Bell doesn\'t apply!'
             ];
@@ -35841,7 +41594,7 @@ class SpaceShooterGame {
             
             // Artistic background: Time and Transformation - Mathematical Realm
             // Time-based equations forming patterns
-            const timeEquations = ['t = τ', 'N(t) = N₀e^(-λt)', 'λ = ln(2)/T₁/₂', 'P(t) = 1 - e^(-λt)', 'τ = 1/λ', 'dN/dt = -λN'];
+            const timeEquations = ['t = τ', 'N(t) = Nâ‚€e^(-λt)', 'λ = ln(2)/Tâ‚/â‚‚', 'P(t) = 1 - e^(-λt)', 'τ = 1/λ', 'dN/dt = -λN'];
             for (let i = 0; i < 16; i++) {
                 const angle = (i / 16) * Math.PI * 2 + this.cutsceneTime * 0.4;
                 const radius = 200 + Math.sin(this.cutsceneTime * 0.6 + i) * 70;
@@ -35868,7 +41621,7 @@ class SpaceShooterGame {
             }
             
             // Transformation symbols floating
-            const transformSymbols = ['τ', 't', 'λ', 'T', 'N', 'P', 'e', 'ln', 'd/dt', '∫'];
+            const transformSymbols = ['τ', 't', 'λ', 'T', 'N', 'P', 'e', 'ln', 'd/dt', 'âˆ«'];
             for (let i = 0; i < 25; i++) {
                 const symbolIndex = i % transformSymbols.length;
                 const symbol = transformSymbols[symbolIndex];
@@ -36308,7 +42061,7 @@ class SpaceShooterGame {
             }
             
             // Circuit symbols floating
-            const circuitSymbols = ['→', '⟶', '⟹', '↗', '↘', '⟲', '⟳'];
+            const circuitSymbols = ['→', 'âŸ¶', 'âŸ¹', 'â†—', 'â†˜', 'âŸ²', 'âŸ³'];
             for (let i = 0; i < 15; i++) {
                 const symbolIndex = i % circuitSymbols.length;
                 const symbol = circuitSymbols[symbolIndex];
@@ -36495,7 +42248,7 @@ class SpaceShooterGame {
             }
             
             // Circuit symbols floating
-            const circuitSymbols = ['→', '⟶', '⟹', '↗', '↘', '⟲', '⟳', '⟷', '⇄'];
+            const circuitSymbols = ['→', 'âŸ¶', 'âŸ¹', 'â†—', 'â†˜', 'âŸ²', 'âŸ³', 'âŸ·', 'â‡„'];
             for (let i = 0; i < 20; i++) {
                 const symbolIndex = i % circuitSymbols.length;
                 const symbol = circuitSymbols[symbolIndex];
@@ -37039,8 +42792,8 @@ class SpaceShooterGame {
             const largeSymbols = [
                 { sym: 'ψ', x: w * 0.15, y: h * 0.2, color: 'rgba(79, 195, 247, 0.3)' },
                 { sym: '=', x: w * 0.1, y: h * 0.7, color: 'rgba(79, 195, 247, 0.25)' },
-                { sym: '✓', x: w * 0.85, y: h * 0.25, color: 'rgba(255, 170, 68, 0.25)' },
-                { sym: '●', x: w * 0.9, y: h * 0.7, color: 'rgba(255, 170, 68, 0.25)' }
+                { sym: 'âœ“', x: w * 0.85, y: h * 0.25, color: 'rgba(255, 170, 68, 0.25)' },
+                { sym: 'â—', x: w * 0.9, y: h * 0.7, color: 'rgba(255, 170, 68, 0.25)' }
             ];
             
             for (let i = 0; i < largeSymbols.length; i++) {
@@ -37248,7 +43001,7 @@ class SpaceShooterGame {
             }
             
             // Value symbols floating
-            const valueSymbols = ['=', '→', '✓', '●', '■', '▲', '◆'];
+            const valueSymbols = ['=', '→', 'âœ“', 'â—', 'â– ', 'â–²', 'â—†'];
             for (let i = 0; i < 20; i++) {
                 const symbolIndex = i % valueSymbols.length;
                 const symbol = valueSymbols[symbolIndex];
@@ -37442,7 +43195,7 @@ class SpaceShooterGame {
             }
             
             // Protection symbols floating
-            const protectionSymbols = ['🛡', '◉', '○', '●', '⬡', '⬢', '⟲'];
+            const protectionSymbols = ['ðŸ›¡', 'â—‰', 'â—‹', 'â—', 'â¬¡', 'â¬¢', 'âŸ²'];
             for (let i = 0; i < 15; i++) {
                 const symbolIndex = i % protectionSymbols.length;
                 const symbol = protectionSymbols[symbolIndex];
@@ -37620,7 +43373,7 @@ class SpaceShooterGame {
             }
             
             // Barrier symbols floating
-            const barrierSymbols = ['◉', '○', '●', '⬡', '⬢', '⟲', '⟳', '◈'];
+            const barrierSymbols = ['â—‰', 'â—‹', 'â—', 'â¬¡', 'â¬¢', 'âŸ²', 'âŸ³', 'â—ˆ'];
             for (let i = 0; i < 20; i++) {
                 const symbolIndex = i % barrierSymbols.length;
                 const symbol = barrierSymbols[symbolIndex];
@@ -38077,7 +43830,7 @@ class SpaceShooterGame {
             }
             
             // Escape symbols floating
-            const escapeSymbols = ['→', '⟶', '⟹', '↗', '↘', '↑', 'A', 'B', 'or'];
+            const escapeSymbols = ['→', 'âŸ¶', 'âŸ¹', 'â†—', 'â†˜', 'â†‘', 'A', 'B', 'or'];
             for (let i = 0; i < 25; i++) {
                 const symbolIndex = i % escapeSymbols.length;
                 const symbol = escapeSymbols[symbolIndex];
@@ -38244,7 +43997,7 @@ class SpaceShooterGame {
             }
             
             // Power symbols floating
-            const powerSymbols = ['↑', '▲', '△', '⟲', '⚡', '→', '⟶'];
+            const powerSymbols = ['â†‘', 'â–²', 'â–³', 'âŸ²', 'âš¡', '→', 'âŸ¶'];
             for (let i = 0; i < 20; i++) {
                 const symbolIndex = i % powerSymbols.length;
                 const symbol = powerSymbols[symbolIndex];
@@ -38408,7 +44161,7 @@ class SpaceShooterGame {
             }
             
             // Flow symbols floating
-            const flowSymbols = ['→', '⟶', '⟹', '↑', '▲', '△'];
+            const flowSymbols = ['→', 'âŸ¶', 'âŸ¹', 'â†‘', 'â–²', 'â–³'];
             for (let i = 0; i < 15; i++) {
                 const symbolIndex = i % flowSymbols.length;
                 const symbol = flowSymbols[symbolIndex];
@@ -38604,7 +44357,7 @@ class SpaceShooterGame {
             }
             
             // Amplifier symbols floating
-            const ampSymbols = ['▲', '△', '↑', '⟲', '⚡', '→', '⟶'];
+            const ampSymbols = ['â–²', 'â–³', 'â†‘', 'âŸ²', 'âš¡', '→', 'âŸ¶'];
             for (let i = 0; i < 20; i++) {
                 const symbolIndex = i % ampSymbols.length;
                 const symbol = ampSymbols[symbolIndex];
@@ -39146,7 +44899,7 @@ class SpaceShooterGame {
             }
             
             // Realization symbols floating
-            const realizationSymbols = ['✓', '●', '→', '⟶', '↑', '★', '✨'];
+            const realizationSymbols = ['âœ“', 'â—', '→', 'âŸ¶', 'â†‘', 'â˜…', 'âœ¨'];
             for (let i = 0; i < 25; i++) {
                 const symbolIndex = i % realizationSymbols.length;
                 const symbol = realizationSymbols[symbolIndex];
@@ -39297,7 +45050,7 @@ class SpaceShooterGame {
             }
             
             // Victory symbols floating
-            const victorySymbols = ['✓', '★', '✨', '●', '→', '↑', '▲'];
+            const victorySymbols = ['âœ“', 'â˜…', 'âœ¨', 'â—', '→', 'â†‘', 'â–²'];
             for (let i = 0; i < 20; i++) {
                 const symbolIndex = i % victorySymbols.length;
                 const symbol = victorySymbols[symbolIndex];
@@ -39509,7 +45262,7 @@ class SpaceShooterGame {
             }
             
             // Escape symbols floating
-            const escapeSymbols = ['→', '⟶', '⟹', '↑', '★', '✨', '✓', '🚀'];
+            const escapeSymbols = ['→', 'âŸ¶', 'âŸ¹', 'â†‘', 'â˜…', 'âœ¨', 'âœ“', 'ðŸš€'];
             for (let i = 0; i < 25; i++) {
                 const symbolIndex = i % escapeSymbols.length;
                 const symbol = escapeSymbols[symbolIndex];
@@ -39701,7 +45454,7 @@ class SpaceShooterGame {
             }
             
             // Path symbols floating
-            const pathSymbols = ['→', '⟶', '⟹', '↗', '↘', '↑', '★', '✨'];
+            const pathSymbols = ['→', 'âŸ¶', 'âŸ¹', 'â†—', 'â†˜', 'â†‘', 'â˜…', 'âœ¨'];
             for (let i = 0; i < 25; i++) {
                 const symbolIndex = i % pathSymbols.length;
                 const symbol = pathSymbols[symbolIndex];
@@ -39917,7 +45670,7 @@ class SpaceShooterGame {
             }
             
             // Misattribution symbols (cross-out, wrong)
-            const misattributionSymbols = ['✗', '×', '≠', '→', '?'];
+            const misattributionSymbols = ['âœ—', 'Ã—', 'â‰ ', '→', '?'];
             for (let i = 0; i < 12; i++) {
                 const symbolIndex = i % misattributionSymbols.length;
                 const symbol = misattributionSymbols[symbolIndex];
@@ -40142,7 +45895,7 @@ class SpaceShooterGame {
             }
             
             // Truth symbols floating
-            const truthSymbols = ['✓', '★', '→', '⟶', '↑', '●'];
+            const truthSymbols = ['âœ“', 'â˜…', '→', 'âŸ¶', 'â†‘', 'â—'];
             for (let i = 0; i < 20; i++) {
                 const symbolIndex = i % truthSymbols.length;
                 const symbol = truthSymbols[symbolIndex];
@@ -40364,7 +46117,7 @@ class SpaceShooterGame {
             }
             
             // Assembly symbols floating (geometric shapes)
-            const assemblySymbols = ['◉', '⬡', '⬢', '◆', '■', '▲', '●', '○'];
+            const assemblySymbols = ['â—‰', 'â¬¡', 'â¬¢', 'â—†', 'â– ', 'â–²', 'â—', 'â—‹'];
             for (let i = 0; i < 24; i++) {
                 const symbolIndex = i % assemblySymbols.length;
                 const symbol = assemblySymbols[symbolIndex];
@@ -40588,7 +46341,7 @@ class SpaceShooterGame {
             }
             
             // Structure symbols floating (geometric)
-            const structureSymbols = ['⬡', '⬢', '◆', '■', '▲', '◉', '●', '○'];
+            const structureSymbols = ['â¬¡', 'â¬¢', 'â—†', 'â– ', 'â–²', 'â—‰', 'â—', 'â—‹'];
             for (let i = 0; i < 22; i++) {
                 const symbolIndex = i % structureSymbols.length;
                 const symbol = structureSymbols[symbolIndex];
@@ -40847,7 +46600,7 @@ class SpaceShooterGame {
             }
             
             // Separation symbols floating
-            const separationSymbols = ['◉', '⬡', '⬢', '◆', '■', '▲', '●', '○', '✓'];
+            const separationSymbols = ['â—‰', 'â¬¡', 'â¬¢', 'â—†', 'â– ', 'â–²', 'â—', 'â—‹', 'âœ“'];
             for (let i = 0; i < 24; i++) {
                 const symbolIndex = i % separationSymbols.length;
                 const symbol = separationSymbols[symbolIndex];
@@ -41767,6 +47520,18 @@ class SpaceShooterGame {
         // Cutscenes need real-time deltaTime for proper timing (not fixed frame time)
         const isCutscene = this.gameState === 'cutscene';
         
+        // Ensure cursor is hidden during gameplay (crosshair is drawn instead)
+        // Only hide if actually playing and not in any menu
+        // Note: 'paused' state is considered a menu state and should show cursor
+        if (this.gameState === 'playing' && !isGamePaused && !isCutscene) {
+            if (this.canvas && this.canvas.style.cursor !== 'none') {
+                this.canvas.style.cursor = 'none';
+            }
+            if (document.body.style.cursor !== 'none') {
+                document.body.style.cursor = 'none';
+            }
+        }
+        
         // Only update lastTime if game is actually running
         // This prevents huge deltaTime when unpausing
         if (!isGamePaused && !isCutscene) {
@@ -41821,6 +47586,176 @@ class SpaceShooterGame {
     }
 
     // ========== DEV MODE FUNCTIONS ==========
+
+    // Centralized music stop helper to prevent overlap across cutscenes/dev jumps
+    stopAllMusic(reason = 'stopAllMusic', blockUntilManualRestart = false, purgeTracked = false) {
+        console.log(`[Audio] ${reason} - stopping all music and clearing pending restarts`);
+
+        // Invalidate any in-flight or pending music starts
+        if (this.audio && typeof this.audio.bumpMusicSession === 'function') {
+            this.audio.bumpMusicSession();
+        }
+
+        // When called from dev tools, block auto-restarts until we explicitly allow
+        if (blockUntilManualRestart) {
+            this._devMusicBlocked = true;
+        }
+
+        // Clear any pending queued restart handlers
+        if (this._devPendingMainHandler) {
+            document.removeEventListener('click', this._devPendingMainHandler);
+            document.removeEventListener('keydown', this._devPendingMainHandler);
+            this._devPendingMainHandler = null;
+        }
+        this._devPendingMain = null;
+
+        // Clear any pending dev music restart
+        if (this._devMusicResetTimeout) {
+            clearTimeout(this._devMusicResetTimeout);
+            this._devMusicResetTimeout = null;
+        }
+        this._devMusicResetPending = false;
+
+        if (this.audio) {
+            // Stop current tracked music
+            if (this.audio.currentMusicElement) {
+                try {
+                    this.audio.currentMusicElement.volume = 0;
+                    this.audio.currentMusicElement.pause();
+                    this.audio.currentMusicElement.currentTime = 0;
+                    this.audio.currentMusicElement.load();
+                } catch (e) {
+                    console.warn('[Audio] Error stopping currentMusicElement:', e);
+                }
+                if (this.audio.currentMusicElement.parentNode) {
+                    this.audio.currentMusicElement.parentNode.removeChild(this.audio.currentMusicElement);
+                }
+                this.audio.currentMusicElement = null;
+            }
+            this.audio.currentMusic = null;
+            this.audio.pendingMusic = null;
+
+            // Stop any tracked audio elements marked as music
+            if (this.audio.allCreatedAudioElements && this.audio.allCreatedAudioElements.size > 0) {
+                const toRemove = [];
+                this.audio.allCreatedAudioElements.forEach(audio => {
+                    try {
+                        const src = audio.src || '';
+                        const isMusic = src.includes('music') || src.includes('main_theme') || src.includes('galactic_rap') ||
+                                        audio.dataset.isMusic === 'true' || audio.dataset.channel === 'music';
+                        if (isMusic) {
+                            audio.volume = 0;
+                            audio.pause();
+                            audio.currentTime = 0;
+                            audio.onended = null;
+                            audio.onplay = null;
+                            audio.oncanplaythrough = null;
+                            audio.onloadeddata = null;
+                            audio.onerror = null;
+                            audio.src = '';
+                            try { audio.load(); } catch (e) {}
+                            toRemove.push(audio);
+                        }
+                    } catch (e) {
+                        console.warn('[Audio] Error stopping tracked music element:', e);
+                    }
+                });
+                toRemove.forEach(a => this.audio.allCreatedAudioElements.delete(a));
+                if (purgeTracked) {
+                    this.audio.allCreatedAudioElements.clear();
+                }
+            }
+        }
+
+        // Stop any DOM audio elements that might still be alive
+        const domAudio = document.querySelectorAll('audio');
+        domAudio.forEach(audio => {
+            try {
+                const src = audio.src || audio.getAttribute('src') || '';
+                const isMusic = src.includes('music') || src.includes('main_theme') || src.includes('galactic_rap') ||
+                               audio.dataset.isMusic === 'true' || audio.dataset.channel === 'music' || src.includes('/music/');
+                if (isMusic || src) {
+                    audio.volume = 0;
+                    audio.pause();
+                    audio.currentTime = 0;
+                    audio.onended = null;
+                    audio.onplay = null;
+                    audio.oncanplaythrough = null;
+                    audio.onloadeddata = null;
+                    audio.onerror = null;
+                    audio.src = '';
+                    try { audio.load(); } catch (e) {}
+                    if (audio.parentNode) {
+                        audio.parentNode.removeChild(audio);
+                    }
+                }
+            } catch (e) {
+                console.warn('[Audio] Error stopping DOM audio element:', e);
+            }
+        });
+    }
+    
+    // Comprehensive reset function for dev mode transitions
+    // Ensures clean state when jumping between levels, cutscenes, bosses, etc.
+    devResetState() {
+        console.log('[DEV] Resetting all game state for clean transition...');
+        this._devLevelControlActive = false;
+
+        // Stop all audio/music immediately (no fade to prevent overlap)
+        this.stopAllMusic('devResetState', true);
+        
+        // Exit boss mode if active
+        if (this.bossMode) {
+            this.bossMode = false;
+            this.currentBoss = null;
+            this.bossPuzzleState = {};
+            this._cellBossTracker = undefined;
+            this.bossEnemies = [];
+            this.bossSpawned = false;
+            
+            // Re-enable mode switching buttons
+            document.querySelectorAll('.mode-btn')?.forEach(btn => {
+                btn.style.pointerEvents = 'auto';
+                btn.style.opacity = '1';
+            });
+        }
+        
+        // Exit cutscene if active
+        if (this.gameState === 'cutscene') {
+            this.gameState = 'playing';
+            this.cutsceneIsManual = false;
+            // Clear cutscene data
+            if (this.willsWayIntroData) {
+                this.willsWayIntroData.bullets = [];
+                this.willsWayIntroData.totalPuzzlesSolved = 0;
+            }
+        }
+        
+        // Close level-up menu if open
+        if (this.levelUpState || this.gameState === 'levelup') {
+            this.levelUpState = false;
+            this.gameState = 'playing';
+        }
+        
+        // Clear all game entities
+        this.obstacles = [];
+        this.enemyShips = [];
+        this.bossEnemies = [];
+        this.bullets = [];
+        this.enemyBullets = [];
+        this.targets = [];
+        this.pairs = [];
+        this.items = [];
+        this.particles = [];
+        
+        // Reset cleanup flags
+        this._cleanupNeeded = false;
+        
+        // Reset cached elements
+        this._cachedBossCore = null;
+        
+        console.log('[DEV] State reset complete');
+    }
     
     devTogglePanel() {
         console.log('[DEV] devTogglePanel called');
@@ -41861,23 +47796,187 @@ class SpaceShooterGame {
         console.log('[DEV] Dev panel toggled:', isActive ? 'OPEN' : 'CLOSED');
     }
 
+    // Helper function to fully reset music as if game just started (for dev level control)
+    devResetMusic() {
+        if (!this.devMode) return; // Only reset in dev mode
+
+        console.log('[DEV] devResetMusic called - FORCE stopping all music immediately');
+
+        this.stopAllMusic('devResetMusic', true, true);
+
+        // Mark that a fresh restart is required; actual restart is coordinated by devStartFreshMusic
+        this._devMusicResetPending = true;
+        this._devMusicBlocked = true;
+        this._devMusicResetTimeout = null;
+    }
+
+    // Dev helper: hard-stop everything and start main music fresh (no overlap)
+    devForceMusicRestart() {
+        // Fully stop and clear pending restarts
+        this.stopAllMusic('devForceMusicRestart', false, true);
+        this._devMusicBlocked = false;
+        this._devMusicResetPending = false;
+        if (this._devMusicResetTimeout) {
+            clearTimeout(this._devMusicResetTimeout);
+            this._devMusicResetTimeout = null;
+        }
+        if (this.audio) {
+            this.audio.currentMusic = null;
+            this.audio.currentMusicElement = null;
+            this.audio.pendingMusic = null;
+        }
+        // Clear any queued pending main handler
+        if (this._devPendingMainHandler) {
+            document.removeEventListener('click', this._devPendingMainHandler);
+            document.removeEventListener('keydown', this._devPendingMainHandler);
+            this._devPendingMainHandler = null;
+        }
+        this._devPendingMain = null;
+
+        // Bump session to invalidate any in-flight starts
+        if (this.audio && typeof this.audio.bumpMusicSession === 'function') {
+            this.audio.bumpMusicSession();
+        }
+
+        // Start main music fresh after a tiny delay to ensure DOM purge completes
+        setTimeout(() => {
+            this.startMainMusicWithFallback({ forceRestart: true, fadeIn: false });
+        }, 20);
+    }
+
+    // Dev helper: single-track start for level control (no fallbacks, no queues)
+    devLevelStartSingleTrack() {
+        this._devLevelControlActive = true;
+        this.stopAllMusic('devLevelStartSingleTrack', false, true);
+        this._devMusicBlocked = false;
+        this._devMusicResetPending = false;
+        if (this._devMusicResetTimeout) {
+            clearTimeout(this._devMusicResetTimeout);
+            this._devMusicResetTimeout = null;
+        }
+        if (this.audio) {
+            this.audio.currentMusic = null;
+            this.audio.currentMusicElement = null;
+            this.audio.pendingMusic = null;
+        }
+        if (this._devPendingMainHandler) {
+            document.removeEventListener('click', this._devPendingMainHandler);
+            document.removeEventListener('keydown', this._devPendingMainHandler);
+            this._devPendingMainHandler = null;
+        }
+        this._devPendingMain = null;
+        if (this.audio && typeof this.audio.bumpMusicSession === 'function') {
+            this.audio.bumpMusicSession();
+        }
+        // Allow one dev music start
+        this._devAllowMusicStart = true;
+        this.audio.playMusic('main', true, false, true);
+        this._devAllowMusicStart = false;
+        // Allow normal auto-starts after this call
+        this._devLevelControlActive = false;
+    }
+
+    // Dev helper: if overlapping tracks occur, force down to a single current track (no restart)
+    devFixMusicOverlap() {
+        try {
+            // Nuke all audio elements, then start exactly one main track
+            const allAudio = Array.from(document.querySelectorAll('audio'));
+            allAudio.forEach(a => {
+                try {
+                    a.pause();
+                    a.currentTime = 0;
+                    a.onended = null;
+                    a.onplay = null;
+                    a.oncanplaythrough = null;
+                    a.onloadeddata = null;
+                    a.onerror = null;
+                    a.src = '';
+                    try { a.load(); } catch (e) {}
+                    if (a.parentNode) {
+                        a.parentNode.removeChild(a);
+                    }
+                } catch (e) {
+                    console.warn('[DEV] Error removing audio element:', e);
+                }
+            });
+
+            // Clear pending handlers/flags/timeouts
+            if (this._devPendingMainHandler) {
+                document.removeEventListener('click', this._devPendingMainHandler);
+                document.removeEventListener('keydown', this._devPendingMainHandler);
+                this._devPendingMainHandler = null;
+            }
+            this._devPendingMain = null;
+            this._devMusicBlocked = false;
+            this._devMusicResetPending = false;
+            if (this._devMusicResetTimeout) {
+                clearTimeout(this._devMusicResetTimeout);
+                this._devMusicResetTimeout = null;
+            }
+
+            if (this.audio) {
+                this.audio.currentMusic = null;
+                this.audio.currentMusicElement = null;
+                this.audio.pendingMusic = null;
+            }
+
+            // Bump session to invalidate any queued starts
+            this._activeMusicSession = ++this._musicSessionId;
+
+            // Allow one dev music start, then start main fresh
+            this._devAllowMusicStart = true;
+            this.audio.playMusic('main', true, false, true);
+            this._devAllowMusicStart = false;
+        } catch (e) {
+            console.warn('[DEV] devFixMusicOverlap failed:', e);
+        }
+    }
+
+    // Start the main track as a brand-new session after a dev jump
+    devStartFreshMusic(forceRestart = true) {
+        if (!this.devMode) return;
+
+        // Defer while menus/cutscenes are open to avoid unwanted restarts
+        const inMenuOrCutscene = this.gameState === 'levelup' || this.levelUpState ||
+                                 this.gameState === 'cutscene' || !!this.cutsceneId;
+        if (inMenuOrCutscene) {
+            this._devMusicResetPending = true;
+            this._devMusicBlocked = true;
+            return;
+        }
+
+        // Clear any pending dev reset timer
+        if (this._devMusicResetTimeout) {
+            clearTimeout(this._devMusicResetTimeout);
+            this._devMusicResetTimeout = null;
+        }
+
+        // Hard stop anything lingering, without re-blocking restart
+        this.stopAllMusic('devStartFreshMusic-prep', false, true);
+
+        this._devMusicBlocked = false;
+        this._devMusicResetPending = false;
+
+        if (this.audio) {
+            this.audio.currentMusic = null;
+            this.audio.currentMusicElement = null;
+            this.audio.pendingMusic = null;
+        }
+
+        this.startMainMusicWithFallback({ forceRestart, fadeIn: false });
+    }
+
     devSetLevel() {
+        // Reset all state for clean transition
+        this.devResetState();
+        this._devLevelControlActive = true;
+        
         const input = document.getElementById('devLevelInput');
         if (input) {
             const newLevel = parseInt(input.value) || 1;
             const targetLevel = Math.max(1, newLevel);
             const oldLevel = this.level;
-            
-            // Exit boss mode if we're in it
-            if (this.bossMode) {
-                this.exitBossMode();
-            }
-            
-            // Close level-up menu if open
-            if (this.levelUpState || this.gameState === 'levelup') {
-                this.continueFromLevelUp();
-            }
-            
+
             // Update level
             this.level = targetLevel;
             
@@ -41895,49 +47994,29 @@ class SpaceShooterGame {
                 this.gameState = 'playing';
                 this.levelUpState = false;
             }
-            
-            // If level increased, trigger level-up state (like normal progression)
-            if (targetLevel > oldLevel) {
-                this.triggerLevelUp();
-            } else {
-                // Just update UI if level decreased or same
-                this.updateDevUI();
-                console.log(`[DEV] Jumped to level ${this.level}`);
-            }
+
+            // Dev mode level control: hard reset music and restart once ready
+            this.devResetMusic();
+
+            // Show level-up menu when jumping to a level
+            this.levelUpState = true;
+            this.gameState = 'playing';
+            this._devMusicBlocked = false;
+            this._devMusicResetPending = false;
+            this.updateDevUI();
+            console.log(`[DEV] Jumped from level ${oldLevel} to level ${this.level} - showing level-up menu`);
+            this._devLevelControlActive = false;
+            // Show the level-up menu where player can craft, upgrade, and continue
+            this.showLevelUpMenu();
         }
     }
 
     devNextLevel() {
         console.log('[DEV] devNextLevel called');
-        
-        // Exit boss mode if we're in it (manually to avoid showing level-up menu)
-        if (this.bossMode) {
-            console.log('[DEV] Exiting boss mode');
-            this.bossMode = false;
-            this.currentBoss = null;
-            this.bossPuzzleState = {};
-            
-            // Re-enable mode switching buttons
-            document.querySelectorAll('.mode-btn')?.forEach(btn => {
-                btn.style.pointerEvents = 'auto';
-                btn.style.opacity = '1';
-            });
-            
-            // Return to individual mode
-            this.setMode('individual');
-            
-            // Clear boss-specific entities
-            this.obstacles = this.obstacles.filter(o => !o.isBoss);
-            
-            // Return to main music
-            this.audio.playMusic('main', true, true);
-        }
-        
-        // Close level-up menu if open
-        if (this.levelUpState || this.gameState === 'levelup') {
-            console.log('[DEV] Closing existing level-up menu');
-            this.continueFromLevelUp();
-        }
+        this._devLevelControlActive = true;
+
+        // Reset all state for clean transition
+        this.devResetState();
         
         // Increment level
         const oldLevel = this.level;
@@ -41952,20 +48031,28 @@ class SpaceShooterGame {
         this.targetSpawnRate = this.getTargetSpawnRateForLevel();
         this.obstacleSpawnRate = this.getObstacleSpawnRateForLevel();
         
-        // Ensure game is in playing state before triggering level-up
-        this.gameState = 'playing';
-        this.levelUpState = false;
-        
-        // Trigger level-up state (like normal progression)
-        console.log('[DEV] Triggering level-up');
-        try {
-            this.triggerLevelUp();
-        } catch (error) {
-            console.error('[DEV] Error in triggerLevelUp:', error);
-        }
+          // Ensure game is in playing state before triggering level-up
+          this.gameState = 'playing';
+          
+          // Dev mode level control: Always reset music when using level control (as if game just started)
+          this.devResetMusic();
+
+          // Show level-up menu instead of skipping it
+          this.levelUpState = true;
+          this._devMusicBlocked = false;
+          this._devMusicResetPending = false;
+          this.updateDevUI();
+          console.log(`[DEV] Level changed from ${oldLevel} to ${this.level} - showing level-up menu`);
+          this._devLevelControlActive = false;
+          // Show the level-up menu where player can craft, upgrade, and continue
+          this.showLevelUpMenu();
     }
 
     devPrevLevel() {
+        // Reset all state for clean transition
+        this.devResetState();
+        this._devLevelControlActive = true;
+        
         const oldLevel = this.level;
         this.level = Math.max(1, this.level - 1);
         
@@ -41977,9 +48064,19 @@ class SpaceShooterGame {
         this.targetSpawnRate = this.getTargetSpawnRateForLevel();
         this.obstacleSpawnRate = this.getObstacleSpawnRateForLevel();
         
-        // Don't trigger level-up when going backwards, just update
-        this.updateDevUI();
-        console.log(`[DEV] Level: ${this.level}`);
+          // Dev mode level control: Always reset music when using level control (as if game just started)
+          this.devResetMusic();
+          
+          // Show level-up menu when going to previous level
+          this.levelUpState = true;
+          this.gameState = 'playing';
+          this._devMusicBlocked = false;
+          this._devMusicResetPending = false;
+          this.updateDevUI();
+          console.log(`[DEV] Level changed from ${oldLevel} to ${this.level} - showing level-up menu`);
+          this._devLevelControlActive = false;
+          // Show the level-up menu where player can craft, upgrade, and continue
+          this.showLevelUpMenu();
     }
     
     // Helper method to trigger level-up (extracted from normal progression logic)
@@ -42210,6 +48307,9 @@ class SpaceShooterGame {
     }
 
     devSpawnBoss() {
+        // Reset all state for clean transition
+        this.devResetState();
+        
         // Ensure level is at least 15 for boss spawning
         if (this.level < 15) {
             this.level = 15;
@@ -42231,12 +48331,6 @@ class SpaceShooterGame {
         
         console.log('[DEV] Canvas size:', this.canvas.width, 'x', this.canvas.height);
         console.log('[DEV] Entering boss mode for level:', this.level);
-        
-        // Clear any existing obstacles/enemies BEFORE entering boss mode
-        this.obstacles = [];
-        this.enemyShips = [];
-        this.targets = [];
-        this.pairs = [];
         
         // Enter boss mode (this will spawn the boss)
         this.enterBossMode();
@@ -42277,6 +48371,9 @@ class SpaceShooterGame {
     }
     
     devSpawnSpecificBoss() {
+        // Reset all state for clean transition
+        this.devResetState();
+        
         const select = document.getElementById('devBossSelect');
         if (!select) {
             console.error('[DEV] Boss select element not found!');
@@ -42334,6 +48431,9 @@ class SpaceShooterGame {
     }
 
     devSkipToBoss() {
+        // Reset all state for clean transition
+        this.devResetState();
+        
         // Jump to next boss level
         const nextBossLevel = Math.ceil(this.level / 15) * 15;
         this.level = nextBossLevel || 15;
@@ -42368,11 +48468,9 @@ class SpaceShooterGame {
     }
 
     devPlayCutscene() {
-        // Prevent multiple simultaneous calls
-        if (this.gameState === 'cutscene') {
-            console.log('[DEV] Cutscene already playing, ignoring duplicate call');
-            return;
-        }
+        // Reset all state for clean transition (except cutscene state which we'll set)
+        this.devResetState();
+        this.stopAllMusic('devPlayCutscene'); // ensure no pending restarts bleed into cutscenes
         
         const select = document.getElementById('devCutsceneSelect');
         if (!select) {
@@ -42503,9 +48601,12 @@ class SpaceShooterGame {
         }
         const levelInput = document.getElementById('devLevelInput');
         if (levelInput) {
-            const currentInput = parseInt(levelInput.value) || 0;
-            if (currentInput !== this.level) {
-                levelInput.value = this.level;
+            // Only update the input if it's not focused (user is not editing it)
+            if (document.activeElement !== levelInput) {
+                const currentInput = parseInt(levelInput.value) || 0;
+                if (currentInput !== this.level) {
+                    levelInput.value = this.level;
+                }
             }
         }
     }
@@ -42521,6 +48622,23 @@ class SpaceShooterGame {
             console.log('[DEV] Panel initial state - display:', window.getComputedStyle(panel).display);
         } else {
             console.error('[DEV] WARNING: Dev panel not found in DOM!');
+        }
+
+        // Setup level input to allow proper editing
+        const levelInput = document.getElementById('devLevelInput');
+        if (levelInput) {
+            // Allow Enter key to set level
+            levelInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.devSetLevel();
+                }
+            });
+            
+            // Allow full editing - don't restrict input
+            levelInput.addEventListener('input', (e) => {
+                // Allow any input - validation happens on submit
+            });
         }
 
         // Update UI on interval (but not during cutscenes)
@@ -42645,4 +48763,20 @@ window.addEventListener('load', () => {
         alert('Error loading game. Check console.');
     }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

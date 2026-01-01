@@ -1,14 +1,14 @@
-const CACHE_NAME = 'beyond-bell-v1';
+const CACHE_NAME = 'beyond-bell-minmain-v1';
 const ASSETS = [
     './',
     './index.html',
-    './index-dev.html',
     './game.js',
     './config.js',
     './download.js',
     './jszip.min.js',
     './music/main_theme.ogg',
-    './music/galactic_rap.ogg'
+    './music/galactic_rap.ogg',
+    './sfx/zap.wav'
 ];
 
 self.addEventListener('install', event => {

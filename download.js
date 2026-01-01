@@ -9,7 +9,7 @@
         }
     };
     const cacheBuster = () => '?v=' + Date.now() + '&r=' + Math.random().toString(36).slice(2);
-    const directZip = 'beyond-bell-offline-new.zip'; // Using new ZIP until old one is unlocked
+    const directZip = 'beyond-bell-offline.zip';
 
     const textFiles = [
         'index.html',

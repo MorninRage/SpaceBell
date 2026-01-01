@@ -937,9 +937,14 @@ class SpaceShooterGame {
             
             document.removeEventListener('click', initAudioOnInteraction);
             document.removeEventListener('keydown', initAudioOnInteraction);
+            document.removeEventListener('touchstart', initAudioOnInteraction);
+            document.removeEventListener('touchend', initAudioOnInteraction);
         };
         document.addEventListener('click', initAudioOnInteraction, { once: true });
         document.addEventListener('keydown', initAudioOnInteraction, { once: true });
+        // Add touch events for mobile devices
+        document.addEventListener('touchstart', initAudioOnInteraction, { once: true, passive: true });
+        document.addEventListener('touchend', initAudioOnInteraction, { once: true, passive: true });
         
         // Game state
         this.mode = 'individual';
@@ -7349,9 +7354,15 @@ class SpaceShooterGame {
 
     update(deltaTime) {
         // Update cutscene if active - DON'T update time or level during cutscenes
-        if (this.gameState === 'cutscene') {
+        // Allow movement during interactive cutscene phases (0 and 1) for mobile controls
+        const isInteractiveCutscene = this.gameState === 'cutscene' && this.cutsceneId === 'willsWayIntro' && (this.cutscenePhase === 0 || this.cutscenePhase === 1);
+        if (this.gameState === 'cutscene' && !isInteractiveCutscene) {
             this.updateCutscene(deltaTime);
             return; // Early return prevents time/level updates
+        }
+        if (isInteractiveCutscene) {
+            this.updateCutscene(deltaTime);
+            // Continue to movement code below for interactive phases
         }
         
         // Update gamepad input (always check, even when paused)
@@ -7371,7 +7382,9 @@ class SpaceShooterGame {
         if (this.gameState === 'levelup' || this.levelUpState) {
             return;
         }
-        if (this.gameState !== 'playing') return;
+        // Allow updates during interactive cutscene phases (0 and 1) for mobile controls
+        // isInteractiveCutscene is already declared earlier in this function
+        if (this.gameState !== 'playing' && !isInteractiveCutscene) return;
         
         // Update survival system (hunger decay, boost duration, etc.)
         if (this.survivalUnlocked) {
@@ -14416,6 +14429,11 @@ class SpaceShooterGame {
                 this._cutsceneDrawCallLogged = true;
             }
             this.drawCutscene();
+            // Draw player during interactive cutscene phases (0 and 1) for mobile controls
+            const isInteractiveCutscene = this.gameState === 'cutscene' && this.cutsceneId === 'willsWayIntro' && (this.cutscenePhase === 0 || this.cutscenePhase === 1);
+            if (isInteractiveCutscene) {
+                this.drawPlayer();
+            }
             return;
         }
         
@@ -21807,10 +21825,16 @@ class SpaceShooterGame {
     
     drawHUD() {
         // Enhanced HUD - positioned at bottom right corner (compact)
-        const barWidth = 200;
-        const barHeight = 20;
-        const padding = 10;
-        const spacing = 5;
+        // Detect mobile device for scaling
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                        (navigator.maxTouchPoints && navigator.maxTouchPoints > 2) ||
+                        window.matchMedia('(pointer: coarse)').matches;
+        const mobileScale = isMobile ? 0.6 : 1.0; // Scale meters to 60% on mobile
+        
+        const barWidth = 200 * mobileScale;
+        const barHeight = 20 * mobileScale;
+        const padding = 10 * mobileScale;
+        const spacing = 5 * mobileScale;
         const x = this.canvas.width - barWidth - padding; // Right side
         let y = this.canvas.height - padding; // Start from bottom
         
@@ -21897,10 +21921,11 @@ class SpaceShooterGame {
         this.ctx.shadowBlur = 0;
         
         this.ctx.fillStyle = `rgba(255, 193, 7, ${uiAlpha})`;
-        this.ctx.font = 'bold 13px Arial';
+        const tokenFontSize = isMobile ? 9 : 13; // Smaller font on mobile
+        this.ctx.font = `bold ${tokenFontSize}px Arial`;
         this.ctx.shadowBlur = playerUnderUI ? 0 : 8;
         this.ctx.shadowColor = 'rgba(255, 193, 7, 0.8)';
-        this.ctx.fillText(`T: ${this.inventory.tokens}`, x + 50, y);
+        this.ctx.fillText(`T: ${this.inventory.tokens}`, x + 50 * mobileScale, y);
         this.ctx.shadowBlur = 0;
         
         y += 22;
@@ -21930,11 +21955,14 @@ class SpaceShooterGame {
         
         // Health text with glow (compact)
         this.ctx.fillStyle = `rgba(255, 255, 255, ${uiAlpha})`;
-        this.ctx.font = 'bold 12px Arial';
+        const fontSize = isMobile ? 8 : 12; // Smaller font on mobile
+        this.ctx.font = `bold ${fontSize}px Arial`;
         this.ctx.textAlign = 'left';
         this.ctx.shadowBlur = playerUnderUI ? 0 : 4;
         this.ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
-        this.ctx.fillText(`HP: ${Math.ceil(this.playerStats.health)}/${this.playerStats.maxHealth}`, x + 5, y + 15);
+        const textOffsetX = 5 * mobileScale;
+        const textOffsetY = 15 * mobileScale;
+        this.ctx.fillText(`HP: ${Math.ceil(this.playerStats.health)}/${this.playerStats.maxHealth}`, x + textOffsetX, y + textOffsetY);
         this.ctx.shadowBlur = 0;
         
         // Enhanced Shield bar (compact)
@@ -21963,17 +21991,17 @@ class SpaceShooterGame {
             
             // Shield text with glow (compact)
             this.ctx.fillStyle = `rgba(255, 255, 255, ${uiAlpha})`;
-            this.ctx.font = 'bold 12px Arial';
+            this.ctx.font = `bold ${fontSize}px Arial`;
             this.ctx.shadowBlur = playerUnderUI ? 0 : 4;
             this.ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
-            this.ctx.fillText(`S: ${Math.ceil(this.playerStats.shield)}/${this.playerStats.maxShield}`, x + 5, y + 15);
+            this.ctx.fillText(`S: ${Math.ceil(this.playerStats.shield)}/${this.playerStats.maxShield}`, x + textOffsetX, y + textOffsetY);
             this.ctx.shadowBlur = 0;
         } else {
             this.ctx.fillStyle = `rgba(100, 100, 100, ${0.5 * uiAlpha})`;
             this.ctx.fillRect(x + 2, y + 2, barWidth - 4, barHeight - 4);
             this.ctx.fillStyle = `rgba(153, 153, 153, ${uiAlpha})`;
-            this.ctx.font = 'bold 12px Arial';
-            this.ctx.fillText('Shield: None', x + 5, y + 15);
+            this.ctx.font = `bold ${fontSize}px Arial`;
+            this.ctx.fillText('Shield: None', x + textOffsetX, y + textOffsetY);
         }
         
         // Enhanced Shooting/Recharge bar - only show when fire rate is slow enough to be meaningful
@@ -22079,7 +22107,7 @@ class SpaceShooterGame {
             this.ctx.shadowBlur = playerUnderUI ? 0 : 4;
             this.ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
             const hungerStatus = this.hunger > 30 ? '🍽️' : (this.hunger > 10 ? '⚠️' : '💀');
-            this.ctx.fillText(`${hungerStatus} Hunger: ${Math.ceil(this.hunger)}/${this.maxHunger}`, x + 5, y + 15);
+            this.ctx.fillText(`${hungerStatus} Hunger: ${Math.ceil(this.hunger)}/${this.maxHunger}`, x + textOffsetX, y + textOffsetY);
             this.ctx.shadowBlur = 0;
             
             // Boost (Methane) bar

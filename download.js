@@ -16,7 +16,8 @@
         'game.js',
         'config.js',
         'download.js',
-        'sw.js'
+        'sw.js',
+        'mobile-controls.js'
     ];
 
     const binaryFiles = [

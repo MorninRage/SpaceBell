@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>Beyond Bell: Space Shooter - Ensemble vs Individual Systems</title>
     <style>
         * {
@@ -355,6 +358,14 @@
         /* Show score when crafting or shop UI is active (level up) */
         body.level-up #score {
             display: block;
+        }
+        
+        /* Score UI Mobile Scaling - Scale to 50% */
+        @media (max-width: 768px), (pointer: coarse) {
+            #score {
+                transform: scale(0.6) !important;
+                transform-origin: top center !important;
+            }
         }
 
         #score h3 {
@@ -814,6 +825,8 @@
             cursor: default !important;
         }
         
+        /* Level-up UIs already scaled via #craftingUI and #shopUI in mobile media query */
+        
         body.level-up #craftingUI *,
         body.level-up #shopUI * {
             cursor: pointer !important;
@@ -1107,6 +1120,17 @@
             /* Color, font-size, font-weight, and text-shadow are set dynamically by JavaScript for enhanced styling */
         }
         
+        /* Mobile cutscene text box sizing */
+        @media (max-width: 768px), (pointer: coarse) {
+            .cutscene-text {
+                max-width: 90% !important;
+                padding: 12px 16px !important;
+                bottom: 20px !important;
+                font-size: 0.85em !important;
+                line-height: 1.4 !important;
+            }
+        }
+        
         .cutscene-text.visible {
             opacity: 1;
         }
@@ -1130,6 +1154,412 @@
             background: rgba(79, 195, 247, 0.3);
             box-shadow: 0 0 15px rgba(79, 195, 247, 0.5);
         }
+        
+        /* Mobile Touch Controls */
+        @media (max-width: 768px), (pointer: coarse) {
+            body {
+                touch-action: none;
+                -webkit-touch-callout: none;
+                -webkit-user-select: none;
+                -webkit-tap-highlight-color: transparent;
+            }
+            
+            #gameCanvas {
+                touch-action: none;
+            }
+            
+            /* Virtual Joystick */
+            #mobileJoystick {
+                position: fixed;
+                bottom: 30px;
+                left: 30px;
+                width: 140px;
+                height: 140px;
+                z-index: 20002 !important; /* Above cutscene overlay (20000) and text (20001) */
+                display: none;
+                pointer-events: auto !important;
+            }
+            
+            #mobileJoystick.active {
+                display: block;
+            }
+            
+            /* Hide joysticks during preload */
+            #preloadOverlay:not([style*="display: none"]) ~ #gameContainer #mobileJoystick,
+            body:has(#preloadOverlay:not([style*="display: none"])) #mobileJoystick {
+                display: none !important;
+            }
+            
+            #joystickBase {
+                width: 100%;
+                height: 100%;
+                border-radius: 50%;
+                background: rgba(79, 195, 247, 0.25);
+                border: 4px solid rgba(79, 195, 247, 0.7);
+                position: relative;
+                box-shadow: 0 0 25px rgba(79, 195, 247, 0.5);
+                touch-action: none;
+            }
+            
+            #joystickHandle {
+                width: 60px;
+                height: 60px;
+                border-radius: 50%;
+                background: rgba(79, 195, 247, 0.9);
+                border: 3px solid rgba(79, 195, 247, 1);
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                transition: transform 0.05s linear;
+                box-shadow: 0 0 20px rgba(79, 195, 247, 0.7);
+                touch-action: none;
+            }
+            
+            /* Shoot Button */
+            /* Aim Button (controls crosshair) */
+            #mobileAimButton {
+                position: fixed;
+                bottom: 170px; /* Above fire button with spacing */
+                right: 30px;
+                width: 120px;
+                height: 120px;
+                border-radius: 50%;
+                background: rgba(79, 195, 247, 0.4);
+                border: 4px solid rgba(79, 195, 247, 0.9);
+                z-index: 20002 !important; /* Above cutscene overlay (20000) and text (20001) */
+                display: none;
+                align-items: center;
+                justify-content: center;
+                font-size: 18px;
+                color: #fff;
+                font-weight: bold;
+                text-shadow: 0 0 10px rgba(79, 195, 247, 0.8);
+                box-shadow: 0 0 30px rgba(79, 195, 247, 0.6);
+                user-select: none;
+                -webkit-user-select: none;
+                touch-action: none;
+                pointer-events: auto !important;
+            }
+            
+            #mobileAimButton.active {
+                display: flex;
+            }
+            
+            /* Hide aim button during preload */
+            #preloadOverlay:not([style*="display: none"]) ~ #gameContainer #mobileAimButton,
+            body:has(#preloadOverlay:not([style*="display: none"])) #mobileAimButton {
+                display: none !important;
+            }
+            
+            #mobileAimButton:active {
+                background: rgba(79, 195, 247, 0.7);
+                transform: scale(0.92);
+            }
+            
+            /* Shoot Button */
+            #mobileShootButton {
+                position: fixed;
+                bottom: 30px;
+                right: 30px;
+                width: 120px;
+                height: 120px;
+                border-radius: 50%;
+                background: rgba(255, 82, 82, 0.4);
+                border: 4px solid rgba(255, 82, 82, 0.9);
+                z-index: 20002 !important; /* Above cutscene overlay (20000) and text (20001) */
+                display: none;
+                align-items: center;
+                justify-content: center;
+                font-size: 20px;
+                color: #fff;
+                font-weight: bold;
+                text-shadow: 0 0 10px rgba(255, 82, 82, 0.8);
+                box-shadow: 0 0 30px rgba(255, 82, 82, 0.6);
+                user-select: none;
+                -webkit-user-select: none;
+                touch-action: none;
+                pointer-events: auto !important;
+            }
+            
+            #mobileShootButton.active {
+                display: flex;
+            }
+            
+            /* Hide shoot button during preload */
+            #preloadOverlay:not([style*="display: none"]) ~ #gameContainer #mobileShootButton,
+            body:has(#preloadOverlay:not([style*="display: none"])) #mobileShootButton {
+                display: none !important;
+            }
+            
+            #mobileShootButton:active {
+                background: rgba(255, 82, 82, 0.7);
+                transform: scale(0.92);
+            }
+            
+            /* Mobile UI Improvements - Scale to 50% */
+            #ui {
+                transform: scale(0.6) !important;
+                transform-origin: top left !important;
+                max-width: 95% !important;
+                min-width: auto !important;
+                width: auto !important;
+                font-size: 0.75em !important;
+                padding: 12px !important;
+                top: 10px !important;
+                left: 10px !important;
+                right: 10px !important;
+                max-height: 75vh !important;
+                overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+                touch-action: pan-y !important;
+            }
+            
+            #ui h2 {
+                font-size: 1.2em !important;
+                margin-bottom: 12px !important;
+            }
+            
+            #ui .mode-btn, #ui button {
+                font-size: 0.9em !important;
+                padding: 10px 14px !important;
+            }
+            
+            #ui button, #ui .mode-btn {
+                min-height: 44px !important;
+                padding: 12px 16px !important;
+                font-size: 1em !important;
+                touch-action: manipulation;
+            }
+            
+            #instructions {
+                transform: scale(0.6) !important;
+                transform-origin: top left !important;
+                max-width: 95% !important;
+                width: auto !important;
+                font-size: 0.9em !important;
+                padding: 15px !important;
+                max-height: 85vh;
+                overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch;
+                touch-action: pan-y;
+            }
+            
+            #instructions button {
+                min-height: 44px !important;
+                padding: 12px 20px !important;
+                font-size: 1em !important;
+                touch-action: manipulation;
+            }
+            
+            /* Mobile Close Buttons */
+            .mobile-close-btn {
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                right: 10px;
+                width: 44px;
+                height: 44px;
+                border-radius: 50%;
+                background: rgba(255, 82, 82, 0.8);
+                border: 2px solid rgba(255, 82, 82, 1);
+                color: #fff;
+                font-size: 24px;
+                font-weight: bold;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                z-index: 10001;
+                box-shadow: 0 0 15px rgba(255, 82, 82, 0.6);
+                touch-action: manipulation;
+            }
+            
+            .mobile-close-btn:active {
+                background: rgba(255, 82, 82, 1);
+                transform: scale(0.9);
+            }
+            
+            /* Settings, Crafting, Shop, Inventory UIs - Scale to 50% */
+            #settingsUI, #craftingUI, #shopUI, #inventoryUI, #tutorialUI {
+                transform: scale(0.6) !important;
+                transform-origin: top left !important;
+                max-width: 95% !important;
+                width: auto !important;
+                font-size: 0.9em !important;
+                padding: 15px !important;
+                max-height: 85vh;
+                overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch;
+                touch-action: pan-y;
+            }
+            
+            #settingsUI button, #craftingUI button, #shopUI button, 
+            #inventoryUI button, #tutorialUI button {
+                min-height: 44px !important;
+                padding: 12px 16px !important;
+                touch-action: manipulation;
+            }
+            
+            /* Materials Inventory Mobile Styling - Scale to 50% */
+            #materialsInventory {
+                transform: scale(0.6) !important;
+                transform-origin: top right !important;
+                max-width: 85% !important;
+                width: auto !important;
+                min-width: 160px !important;
+                font-size: 0.7em !important;
+                padding: 8px 10px !important;
+                right: 10px !important;
+                top: 10px !important;
+                position: fixed !important;
+            }
+            
+            #materialsInventory h3 {
+                font-size: 0.85em !important;
+                margin-bottom: 6px !important;
+                padding-bottom: 4px !important;
+            }
+            
+            #materialsInventory .stat-item {
+                padding: 4px 6px !important;
+                margin-bottom: 3px !important;
+                font-size: 0.8em !important;
+                min-height: 28px !important;
+            }
+            
+            #materialsInventory .stat-label {
+                font-size: 0.75em !important;
+            }
+            
+            #materialsInventory .stat-value {
+                font-size: 0.85em !important;
+            }
+            
+            /* Theory Panel Mobile Styling - Scale to 50% */
+            #theoryPanel {
+                transform: scale(0.6) !important;
+                transform-origin: top right !important;
+                max-width: 95% !important;
+                width: auto !important;
+                font-size: 0.75em !important;
+                padding: 12px !important;
+                padding-top: 50px !important; /* Space for close button */
+                max-height: 80vh !important;
+                overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+                touch-action: pan-y !important;
+                top: 10px !important;
+                right: 10px !important;
+                left: auto !important;
+            }
+            
+            #theoryPanel h3 {
+                font-size: 1em !important;
+                margin-bottom: 10px !important;
+            }
+            
+            #theoryPanel .theory-section {
+                margin-bottom: 12px !important;
+                padding: 10px !important;
+            }
+            
+            #theoryPanel .theory-section h4 {
+                font-size: 0.9em !important;
+                margin-bottom: 6px !important;
+            }
+            
+            #theoryPanel .theory-section p {
+                font-size: 0.8em !important;
+                line-height: 1.3 !important;
+            }
+            
+            /* Materials Inventory needs space for close button */
+            #materialsInventory {
+                padding-top: 40px !important;
+            }
+            
+            /* Pause Menu Button - Moved to left side to avoid blocking theory panel */
+            #mobilePauseButton {
+                position: fixed;
+                top: 15px;
+                left: 15px;
+                width: 50px;
+                height: 50px;
+                border-radius: 50%;
+                background: rgba(79, 195, 247, 0.7);
+                border: 3px solid rgba(79, 195, 247, 1);
+                color: #fff;
+                font-size: 20px;
+                display: none;
+                align-items: center;
+                justify-content: center;
+                z-index: 20002 !important; /* Above cutscene overlay */
+                box-shadow: 0 0 20px rgba(79, 195, 247, 0.5);
+                touch-action: manipulation;
+                pointer-events: auto !important;
+            }
+            
+            /* Hide pause button during preload */
+            #preloadOverlay:not([style*="display: none"]) ~ #gameContainer #mobilePauseButton,
+            body:has(#preloadOverlay:not([style*="display: none"])) #mobilePauseButton {
+                display: none !important;
+            }
+            
+            #mobilePauseButton.active {
+                display: flex;
+            }
+            
+            #mobilePauseButton:active {
+                background: rgba(79, 195, 247, 0.9);
+                transform: scale(0.9);
+            }
+            
+            /* Adjust UI position when pause button is visible */
+            #ui {
+                left: 70px !important; /* Move UI right to avoid pause button */
+            }
+            
+            /* Prevent text selection on mobile */
+            * {
+                -webkit-tap-highlight-color: transparent;
+            }
+        }
+        
+        /* Landscape orientation adjustments */
+        @media (max-width: 768px) and (orientation: landscape) {
+            #mobileJoystick {
+                bottom: 15px;
+                left: 15px;
+                width: 120px;
+                height: 120px;
+            }
+            
+            #mobileShootButton {
+                bottom: 15px;
+                right: 15px;
+                width: 100px;
+                height: 100px;
+                font-size: 18px;
+            }
+            
+            #mobilePauseButton {
+                top: 10px;
+                left: 10px;
+                width: 45px;
+                height: 45px;
+                font-size: 18px;
+            }
+            
+            #ui {
+                left: 60px !important;
+                max-height: 90vh !important;
+            }
+            
+            #instructions, #settingsUI, #craftingUI, #shopUI, #inventoryUI, #tutorialUI, #theoryPanel {
+                max-height: 90vh !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -1137,7 +1567,7 @@
     <div id="cutsceneOverlay">
         <canvas id="cutsceneCanvas"></canvas>
         <div class="cutscene-text" id="cutsceneText"></div>
-        <button class="cutscene-skip" id="cutsceneSkip">Skip (Space/Enter/Double-Click)</button>
+        <button class="cutscene-skip" id="cutsceneSkip">Skip (Space/Enter/Double-Tap)</button>
     </div>
     
     <div id="gameContainer">
@@ -1173,6 +1603,7 @@
 
         <!-- Materials Inventory Panel (always visible, compact) -->
         <div id="materialsInventory">
+            <button class="mobile-close-btn" onclick="if(window.game && window.game.togglePause) window.game.togglePause();" style="display: none;">×</button>
             <h3>Materials</h3>
             <div class="stat-item">
                 <span class="stat-label">Electrons:</span>
@@ -1197,6 +1628,7 @@
         </div>
 
         <div id="theoryPanel">
+            <button class="mobile-close-btn" onclick="if(window.game && window.game.togglePause) window.game.togglePause();" style="display: none;">×</button>
             <h3>Theory Panel</h3>
             <div class="theory-section">
                 <h4>Current Mode</h4>
@@ -1211,6 +1643,7 @@
         </div>
 
         <div id="instructions">
+            <button class="mobile-close-btn" onclick="if(window.game) window.game.closeInstructions();" style="display: none;">×</button>
             <h3>Controls</h3>
             
             <div style="margin-bottom: 15px;">
@@ -1303,6 +1736,7 @@
 
         <!-- Crafting UI -->
         <div id="craftingUI">
+            <button class="mobile-close-btn" onclick="if(window.game && window.game.closeCrafting) window.game.closeCrafting();" style="display: none;">×</button>
             <h2 style="color: #4fc3f7; margin-bottom: 20px;">Crafting Station</h2>
             <p style="color: #aaa; margin-bottom: 20px;" id="craftingInstructions">Available only during level-up</p>
             
@@ -1348,6 +1782,7 @@
 
         <!-- Shop UI -->
         <div id="shopUI">
+            <button class="mobile-close-btn" onclick="if(window.game && window.game.closeShop) window.game.closeShop();" style="display: none;">×</button>
             <h2 id="shopTitle" style="color: #4fc3f7; margin-bottom: 20px;">Upgrade Shop</h2>
             <p style="color: #aaa; margin-bottom: 20px;" id="shopInstructions">Available only during level-up</p>
             <p style="color: #4fc3f7; font-size: 1.2em; margin-bottom: 20px;">Tokens: <span id="tokenDisplay">0</span></p>
@@ -1373,6 +1808,7 @@
 
         <!-- Inventory UI -->
         <div id="inventoryUI">
+            <button class="mobile-close-btn" onclick="if(window.game && window.game.closeInventory) window.game.closeInventory();" style="display: none;">×</button>
             <h2 style="color: #4fc3f7; margin-bottom: 20px;">Equipment Inventory</h2>
             <p style="color: #aaa; margin-bottom: 20px;">Press ESC to close</p>
             
@@ -1415,6 +1851,7 @@
 
         <!-- Tutorial UI -->
         <div id="tutorialUI">
+            <button class="mobile-close-btn" onclick="if(window.game && window.game.closeTutorial) window.game.closeTutorial();" style="display: none;">×</button>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                 <h2 style="color: #9c27b0; margin: 0;">📚 Game Tutorial & Guide</h2>
                 <button onclick="game.hideTutorial();" style="background: #f44336; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold;">✕ Close</button>
@@ -2078,6 +2515,7 @@
         
         <!-- Settings UI -->
         <div id="settingsUI">
+            <button class="mobile-close-btn" onclick="if(window.game && window.game.closeSettings) window.game.closeSettings();" style="display: none;">×</button>
             <h2 style="color: #4fc3f7; margin-bottom: 20px;">Settings</h2>
             <p style="color: #aaa; margin-bottom: 20px;">Press ESC to close</p>
             
@@ -2132,7 +2570,7 @@
                            style="width: 100%; margin-bottom: 10px;"
                            oninput="game.updateSetting('gamepadSensitivity', parseInt(this.value)); document.getElementById('sensitivityValue').textContent = this.value;">
                     <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
-                        Adjust how fast the cursor moves with the right joystick (100 = slow, 2000 = very fast)
+                        Adjust cursor sensitivity for gamepad right joystick and mobile touch controls (100 = slow, 2000 = very fast)
                     </p>
                 </div>
             </div>
@@ -2312,6 +2750,17 @@
     <script src="game.js"></script>
     <script src="jszip.min.js"></script>
     <script src="download.js"></script>
+    <script src="mobile-controls.js"></script>
+    <!-- Mobile Touch Controls -->
+    <div id="mobileJoystick">
+        <div id="joystickBase">
+            <div id="joystickHandle"></div>
+        </div>
+    </div>
+    <div id="mobileAimButton">AIM</div>
+    <div id="mobileShootButton">FIRE</div>
+    <div id="mobilePauseButton">⏸</div>
+    
     <script>
         if ('serviceWorker' in navigator && location.protocol !== 'file:') {
             window.addEventListener('load', () => {

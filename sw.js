@@ -5,6 +5,7 @@ const ASSETS = [
     './game.js',
     './config.js',
     './download.js',
+    './mobile-controls.js',
     './jszip.min.js',
     './music/main_theme.ogg',
     './music/galactic_rap.ogg',

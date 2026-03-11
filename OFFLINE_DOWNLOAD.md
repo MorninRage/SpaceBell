@@ -1,24 +1,22 @@
-# Offline Download & Packaging
-
-This project supports offline play via a prebuilt archive and an in-browser fallback.
+# Offline Download & Packaging (minMain)
 
 ## What the download button does
-- Prefers the prebuilt archive `beyond-bell-offline.zip` at the project root.
-- If the archive is unavailable, falls back to building a ZIP in-browser (JSZip) that includes the key files listed in `download.js` (HTML, JS, assets, server folder, docs).
-- A service worker caches assets after the first load when served over `http/https` (not `file://`), enabling offline re-visits.
+- Prefers the prebuilt archive `beyond-bell-offline.zip` at this folder root.
+- If the archive is missing, falls back to building a ZIP in-browser (JSZip) using the file lists in `download.js` (HTML/JS + audio assets).
+- The service worker (`sw.js`) caches the same core assets after the first load when served over `http/https` (not `file://`).
 
-## Keeping the download up to date
-When you want the latest changes (e.g., after editing `game.js`) to be downloadable via the button:
-1) Rebuild the archive (from project root in PowerShell):
-```
-Remove-Item beyond-bell-offline.zip -ErrorAction SilentlyContinue; `
-  $items = Get-ChildItem -Force | Where-Object { $_.Name -notin '.git' -and $_.Name -ne 'beyond-bell-offline.zip' }; `
-  Compress-Archive -Path $items.FullName -DestinationPath beyond-bell-offline.zip -Force
-```
-2) Commit and push the updated `beyond-bell-offline.zip` along with your code changes.
+## Keep the download up to date
+Preferred: run `package_offline.ps1` (PowerShell) from anywhere; it uses the script path to package the current `minMain` contents.
 
-## Notes
-- If you add new files or folders that must be in the JSZip fallback, add them to `textFiles` / `binaryFiles` in `download.js`.
-- The service worker does not affect the ZIP; it only caches assets for revisits.
-- Running from `file://` can block the JSZip fallback fetches; use a local server (e.g., `start_server.ps1`) for the fallback path. The prebuilt ZIP download works regardless.***
+Manual fallback (from `C:\AMD\minMain` in PowerShell):
+```
+Remove-Item beyond-bell-offline.zip -ErrorAction SilentlyContinue;
+$items = Get-ChildItem -Force | Where-Object { $_.Name -notin '.git','beyond-bell-offline.zip' };
+Compress-Archive -Path $items.FullName -DestinationPath beyond-bell-offline.zip -Force
+```
+
+## When you add files
+- Add new text assets to `textFiles` and binaries to `binaryFiles` in `download.js` so the fallback ZIP includes them.
+- Add the same assets to `ASSETS` in `sw.js` if you want them cached for offline play.
+- Rebuild `beyond-bell-offline.zip` after changes so the prebuilt download matches this folder’s contents.
 

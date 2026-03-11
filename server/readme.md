@@ -103,7 +103,7 @@ Get the top score and level.
 
 ## CORS
 
-Currently allows all origins. For production, you may want to restrict this to your Netlify domain.
+Currently allows all origins. For production, I may want to restrict this to my Netlify domain.
 
 
 

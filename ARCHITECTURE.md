@@ -1,66 +1,24 @@
-# ARCHITECTURE
+# Architecture (minMain)
 
-## Overview
-- Single-page HTML5/Canvas game driven by `game.js`; no build tooling.
-- Game loop: `gameLoop()` (in `game.js`) runs `update(deltaTime)` then `draw()` via `requestAnimationFrame`.
-- Rendering and systems are centralized in one Game class plus helper managers (e.g., `AudioManager` at file top).
-- Optional leaderboard backend: simple Express server in `server/` storing scores in a JSON file.
-
-## Frontend structure
-- **HTML shells**: `index.html` (production) and `index-dev.html` (heavier debug UI/styling). Both mount a full-screen canvas and layered UI panels (mode buttons, stats, instructions, theory panel, crafting/shop/inventory, cutscenes, leaderboard UI).
-- **Entry/config**: `config.js` defines `window.API_URL` (empty = offline/localStorage). `sw.js` handles offline caching when hosted (not under `file://`).
-- **Assets**: `music/` (main_theme.ogg, galactic_rap.ogg). SFX/voice paths are defined in `game.js`; missing files fall back gracefully.
-- **Offline bundle**: `beyond-bell-offline.zip` is a prebuilt archive used by `download.js` as a preferred downloadable package; falls back to in-browser zip if missing.
-
-## Core runtime (`game.js`)
-- **AudioManager**: HTML5 Audio (file:// compatible), volume channels, sound throttling, music crossfade, missing-file cache.
-- **Game state & systems**: player stats/progression, weapons/upgrades, crafting, survival (food/materials), bosses, obstacles, particles, UI caching/batching, save/load, dev tools.
-- **Loop control**: `gameLoop()` with optional FPS cap; pause/cutscene handling; resume smoothing to avoid delta spikes.
-- **Rendering pipeline**:
-  - Uses the main canvas 2D context for everything (backgrounds, player, bullets, particles, UI overlays).
-  - Preload overlay blocks start until pre-shaded assets are ready (bullets pre-rendered; enhanced materials stay until higher item-count thresholds: medium 100, low 160, minimal 220).
-  - Bullet rendering includes culling margins and now quality tiers with short-lived locks:
-    - `minimal`: solid circles only, no shadows/particles/gradients.
-    - `low`: solid fill + simple trail line, no gradients/shadows.
-    - `medium`: reduced effects; gradients but fewer/shadowless elements.
-    - `high/ultra`: full effects.
-  - Burst triggers: high bullet count or fire-rate/weapon stacks push into low/minimal for ~20 frames before reconsidering. Particles fully disable in reduced tiers.
-  - Backgrounds/boss scenes use simplified gradients and reduced counts relative to earlier versions but still run per-frame.
-- **Performance safeguards** (already in code):
-  - Off-screen culling for bullets.
-  - DOM query caching and UI update batching.
-  - Object pools for bullets/particles; distance checks use squared math in hot paths.
-  - FPS history informs adaptive quality, but burst locks handle sudden spikes.
-
-## Backend (`server/`)
-- **Tech**: Node.js + Express + CORS + body-parser; file-based storage `leaderboard.json`.
-- **Endpoints**: `GET /api/leaderboard` (top 10), `POST /api/leaderboard` (add/update, keeps top 50), `GET /api/leaderboard/top`, `GET /api/health`.
-- **Usage**: `npm install`, `npm start` (port 3000 default). Configure client via `config.js` (`window.API_URL`).
-- **Deployment**: Procfile/Railway templates included; no database required. For production, tighten CORS and consider persistent storage beyond JSON.
-
-## Data & persistence
-- Client saves to localStorage when `API_URL` is empty; leaderboard uses the server when configured.
-- Audio assets load from relative paths; missing files are cached in a failed-set to avoid repeated fetch attempts.
-
-## Extending safely
-- Rendering: follow quality-tier gates; avoid per-bullet gradient creation in hot paths. Prefer cached colors/gradients or tiered fallbacks.
-- Systems: keep UI updates batched and reuse cached DOM references already present in `game.js`.
-- Backend: if migrating to DB, mirror the shape of entries `{ name, score, level, date }` and keep sorting rules (score desc, then level).
-
-## Notable scripts/tools
-- `start_server.bat` / `start_server.ps1`: basic static hosting helpers.
-- `download.js`: offline build/download logic; prefers the prebuilt zip.
-- `convert_audio.js` + docs: audio conversion pipeline guidance.
-
-## Known performance sensitivities
-- Bullet gradients/shadows/particles are the primary render cost; mitigated via quality tiers and culling.
-- Background gradient creation still happens per-frame in boss scenes; keep counts low when adding effects.
-- Ensure browser GPU acceleration is enabled; service worker caching reduces network overhead when hosted.
-- Early-level pacing: levels 1-15 spawn particles faster and molecules slower with a 10-obstacle cap to keep the opening minutes smooth while still feeding materials.
-- Resource drops now have caps and rendering tiers to prevent late-game overload:
-  - `getResourceDropCap()` limits drop counts by level and on-screen headroom; multipliers are clamped.
-  - `getResourceRenderQuality()` downgrades item visuals (solid circles only in low/minimal modes) and skips auto-collector effects when many items are present. Current thresholds: medium 100, low 160, minimal 220 items (counts or high levels).
-  - Off-screen items are culled from rendering to save CPU/GPU when drop counts spike.
-
-
+- **App type:** Single-page HTML5 canvas game (`index.html` + `game.js`); no build step.
+- **Config:** `config.js` defines `window.API_URL` (leave empty for offline/localStorage).
+- **Offline:** `download.js` prefers `beyond-bell-offline.zip`, falls back to JSZip using the `textFiles`/`binaryFiles` lists. `sw.js` caches the same core assets for hosted/offline revisits.
+- **Assets:** `music/` (main_theme.ogg, galactic_rap.ogg), `sfx/` (zap.wav), `jszip.min.js` for client ZIP fallback.
+- **Serve locally:** Open `index.html` directly or run a simple static server (e.g., `start_server.ps1` in full project; any static server works here).
+- **Preload & caches:** `runPreload()` executes at boot to pre-shade and frame-cache everything before gameplay so runtime work is mostly blits. Pre-shaded sprites: bullet variants (basic/rapid/spread), molecule motion effects (trail/glow/energy flow), ship wobble/stretch/depth passes, explosions/impact particles/energy ripple, intro/start/mode backgrounds, boss scenes (bg/network/puzzle hint + enemies), puzzle/Bell Pair visuals, material drops/tokens, and cutscene logos. Frame-cached animations: quantum plasma/default blue/bell pair particles at 64 frames with size buckets, ethereal materials at 64 frames (sizes 6/8/10/12 across material types and quality tiers), fire/explosion particles at 64 lifetime frames (sizes 4/6/8/12), bullet animation trails per type at 64 frames, player glow at 32 frames (sizes 40/60/80/100), player energy ripples at 32 frames (radii 30–100), molecule atoms at 32 frames across 5 health buckets (sizes 8–24), and classic backgrounds for Mode 1 (Ensemble), Mode 2 (Individual), and Mode 3 (Bell Pair) as cached cycles rebuilt on resize. The Mode 3 classic background uses cached frame blending with a 20π/3 cycle; frameCount is 64 and speedScale is tuned around ~3.5s per loop. Warm-ups: gradient caches for molecule health buckets and fire/blue/orange particle sizes (3/5/8/12), particle pool preallocation, sprite decode touches, and multi-instance audio preload pools.
+- **Audio behavior:** Music is started only once gameplay is active; cutscenes/dev jumps call a central music stop helper and defer restarts until cutscenes/menus close to prevent overlap. Dev level control now hard-stops all music via `devResetMusic` and restarts cleanly through `devStartFreshMusic` to avoid overlapping tracks when jumping levels. `AudioManager` receives dev context (dev flag, allow-start getter, stop-all helper) so its dev-only single-track path is enforced when dev level skip tools run. Music session invalidation is centralized in `AudioManager.bumpMusicSession`, invoked by dev stop helpers.
+- **Update flow:** When adding files, update `download.js` lists, align `sw.js` ASSETS, then rebuild `beyond-bell-offline.zip` (run `package_offline.ps1`) so downloads mirror this folder.
+- **Visuals:** The Atomic Fighter (basic ship) rendering is leaner (duplicate tail-glow pass removed) and now carries: high-speed dust/ionized wake tied to velocity/boost; wingtip micro-thrusters on heavy strafes; ghost afterimage trails at extreme speed/boost; impact scorch + repair shimmer; low-health canopy dim + wingtip flickers; decel/boost-end venting; weapon-colored muzzle bloom; shield-hit diffraction shimmer; gentle hover dust near screen bottom. Quantum Plasma Flame skin now features a warmer orange/yellow core with a golden helical dust wrap running the full plume. Added "Eclipse Nova Hull" (store hull skin, 1 NK test price, unlocked for testing) with obsidian/wine plating, magenta-gold ribbons, amber canopy/tip, and warm tail glow; compatible with all engine flames. All effects respect particle/quality settings and are suppressed in minimal quality.
+- **Visuals – Plasma Flame stability:** Plasma Flame renderer now restores both canvas save states to avoid unbounded context stack growth that could freeze/crash when equipping after adding new store skins.
+- **Molecule atoms:** Atom rendering now pulls from a 64-frame high-fidelity plasma animation cache (pulse + dual rotating bands + inner swirl + halo fringe + micro-motes) with a refreshed cyan/magenta palette; runtime uses base-radius scaling to keep the animation visible while honoring health/size buckets.
+  - Performance: replaces per-frame gradients/shadows with cached frames, eliminating per-atom gradient/shadow work. At 64 frames the cache is larger, but runtime cost stays O(1) per atom (`drawImage` only). Expected per-atom render cost drops from ~30–40 ops (old) to ~3–4 ops (cache fetch + draw) for medium/high quality.
+  - Implementation notes: cache frameCount set to 64; palette expanded; added dual rotating bands, counter-rotating inner band, inner swirl, halo chroma fringe, and micro-motes; frame metadata stores `baseRadius`/`animationScale` and render paths scale from `baseRadius`.
+- **Store System (Neurokeys):** The Store (accessible when paused) uses neurokeys to unlock cosmetic skins. Store is organized into three sections: **Ship Cosmetics** (hull skins, engine flame skins), **Visual Effects** (material drop skins, particle skins for blue target particles, molecule skins for red obstacle molecules), and **Backgrounds** (mode-specific backgrounds). Material drop system renamed from "particles" to "materials" for clarity. New particle skin system added for blue target particles (the ones that take 1 shot to destroy) with first hi-fidelity enhanced skin "Quantum Plasma Particles" featuring animated plasma effects, quantum field distortions, and spectacular visual enhancements. New molecule skin system added for red obstacle molecules with default skin and high-fidelity "Quantum Nebula Molecules" skin featuring stunning animated effects, cosmic energy flows, quantum field distortion rings, orbiting sparkles, and spectacular visual enhancements. Mode 3 (Bell Pair) backgrounds now use their own `bellBackground` slot in `activeSkins` with default skin `classic-bell-pair` auto-equipped and listed in the store so Bell Pair background skins can be swapped like the other modes. A new hi-fidelity northern-lights skin `aurora-borealis-bell` (unlocked for testing) animates multi-layer curtains and motes; future work will add a frame cache for this background. The prior `aurora-bell` skin remains removed. Classic Mode 1 (Ensemble) and Mode 2 (Individual) backgrounds now use 64-frame cached cycles (rebuilt on resize) to avoid per-frame gradient/star/field work.
+- **Upgrades:** See `UPGRADES.md` for the current list of level-up stat upgrades (speed, fire rate, damage, crit, shield bonuses, drops, timers, health) and their increments/caps.
+- **Ship visuals detail:** See `SHIP_VISUALS.md` for Atomic Fighter visual enhancements (motion/impact effects, engine flame skins, gating rules, store auto-equip behavior).
+- **Damage effects:** See `DAMAGE_EFFECTS.md` for comprehensive documentation of molecule damage (spin/wobble) and bullet damage (lunge) effects, including slow-motion, 3D perspective, stretch/shrink, and enhanced particle systems.
+- **Mode drop balance:** Mode 1 (Ensemble) now biases materials to ~70% crystals / 30% quantum; Mode 2 stays 50/50 energy cores vs metal scraps; Mode 3 (Bell Pairs) is ~80% quantum with only ~10% crystals and ~5% each cores/scraps to curb crystal flooding and keep crystals centered in Mode 1.
+- **Cosmetic store (neurokeys):** Flame skins now include `Aurora Helix Flame` (aurora-inspired helix ribbons), `Solar Crown Flame` (radiant solar arc with braided warm streams + teal sparks), and `Lattice Flame` (angular prism/lattice shards with prismatic glints). All are unlocked for testing, distinct from Plasma, and support main + side thrusters with high-fidelity animation.
+- **Mode 1 ensemble background (smooth continuous rotation):** Uses **Option E frame cache** (cache base + geometry interpolation): primary path blits cached base frame, interpolates line endpoints/particles/nodes between two frames via `slerpFrameSelection`, draws flow dots at exact phase along interpolated lines—smooth motion, no pixel blending (no ghosting). Fallback to `drawEnsembleClassicFrameAtPhase` when cache not ready. (a) cycleSpan `20π`; time `Date.now() * 0.0015`; speedScale `0.54`. (b) Cache: 64 frames (default), stores `{ canvas, lineEndpoints, particleData, nodeData }` per frame; clamp 32–1024. See **MODE1_ENSEMBLE_BACKGROUND_SYSTEM.md** for full design.
+- **System Status:** See `C:\Docs\COMPREHENSIVE_GAME_REVIEW.md` for complete system implementation status, documentation analysis, and code statistics (reviewed January 7, 2026). All core systems are fully implemented (95%+ complete). Documentation index available at `C:\Docs\DOCUMENTATION_INDEX.md`.
 

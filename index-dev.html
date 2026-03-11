@@ -47,8 +47,6 @@
             left: 0 !important;
             right: 0 !important;
             bottom: 0 !important;
-            overflow: hidden !important;
-            z-index: 1 !important;
             margin: 0 !important;
             padding: 0 !important;
         }
@@ -642,6 +640,9 @@
                         inset 0 0 12px rgba(79, 195, 247, 0.1);
             transition: all 0.3s ease;
         }
+        #materialsInventory.intro-hidden {
+            display: none !important; /* Hidden during preload and cutscene */
+        }
         
         #materialsInventory:hover {
             box-shadow: 0 0 30px rgba(79, 195, 247, 0.6),
@@ -899,6 +900,37 @@
             max-width: 500px;
         }
         
+        /* Ensure cursor is visible in level-up menu */
+        body.level-up #gameCanvas {
+            cursor: default !important;
+        }
+        
+        body.level-up #craftingUI,
+        body.level-up #shopUI {
+            cursor: default !important;
+        }
+        
+        body.level-up #craftingUI *,
+        body.level-up #shopUI * {
+            cursor: pointer !important;
+        }
+        
+        body.level-up #craftingUI .craft-btn,
+        body.level-up #shopUI .shop-btn,
+        body.level-up #craftingUI .craft-btn:not([disabled]),
+        body.level-up #shopUI .shop-btn:not([disabled]) {
+            cursor: pointer !important;
+        }
+        
+        body.level-up #craftingUI .craft-btn:disabled,
+        body.level-up #shopUI .shop-btn:disabled {
+            cursor: not-allowed !important;
+        }
+        
+        body.level-up #levelUpContinueUI button {
+            cursor: pointer !important;
+        }
+        
         /* When both crafting and shop are active (level-up), position them side by side */
         body.level-up #craftingUI.active {
             left: 25%;
@@ -1115,18 +1147,48 @@
         }
         
         /* Gamepad selection highlighting */
-        .craft-btn.gamepad-selected, .shop-btn.gamepad-selected {
-            background: #ffc107;
-            color: #000;
-            box-shadow: 0 0 20px rgba(255, 193, 7, 0.8);
-            transform: scale(1.1);
-            border: 2px solid #ffc107;
+        .craft-btn.gamepad-selected, .shop-btn.gamepad-selected,
+        #levelUpContinueUI button.gamepad-selected {
+            background: #ffc107 !important;
+            color: #000 !important;
+            box-shadow: 0 0 25px rgba(255, 193, 7, 0.9), 0 0 50px rgba(255, 193, 7, 0.5) !important;
+            transform: scale(1.08) !important;
+            border: 3px solid #ffc107 !important;
+            animation: gamepadPulse 1.2s ease-in-out infinite;
+        }
+        
+        @keyframes gamepadPulse {
+            0%, 100% { box-shadow: 0 0 25px rgba(255, 193, 7, 0.9), 0 0 50px rgba(255, 193, 7, 0.5); }
+            50% { box-shadow: 0 0 35px rgba(255, 193, 7, 1), 0 0 70px rgba(255, 193, 7, 0.7); }
         }
         
         .craft-btn.gamepad-selected:disabled, .shop-btn.gamepad-selected:disabled {
-            background: #555;
-            box-shadow: 0 0 10px rgba(255, 193, 7, 0.4);
-            transform: scale(1) !important; /* Prevent disabled buttons from scaling */
+            background: #555 !important;
+            box-shadow: 0 0 10px rgba(255, 193, 7, 0.4) !important;
+            transform: scale(1) !important;
+        }
+        
+        /* Level-up panel highlighting - entire box glows when focused */
+        body.level-up #craftingUI.gamepad-panel-active {
+            box-shadow: 0 0 50px rgba(79, 195, 247, 0.8), 0 0 100px rgba(79, 195, 247, 0.4),
+                        inset 0 0 30px rgba(79, 195, 247, 0.15);
+            border: 3px solid #4fc3f7;
+            outline: 2px solid rgba(79, 195, 247, 0.5);
+        }
+        
+        body.level-up #shopUI.gamepad-panel-active {
+            box-shadow: 0 0 50px rgba(79, 195, 247, 0.8), 0 0 100px rgba(79, 195, 247, 0.4),
+                        inset 0 0 30px rgba(79, 195, 247, 0.15);
+            border: 3px solid #4fc3f7;
+            outline: 2px solid rgba(79, 195, 247, 0.5);
+        }
+        
+        #levelUpContinueUI.gamepad-panel-active {
+            box-shadow: 0 0 40px rgba(76, 175, 80, 0.9), 0 0 80px rgba(76, 175, 80, 0.5);
+        }
+        
+        #levelUpContinueUI.gamepad-panel-active button {
+            box-shadow: 0 0 30px rgba(76, 175, 80, 0.9) !important;
         }
         
         /* Ensure buttons don't interfere with each other */
@@ -1206,6 +1268,69 @@
         .cutscene-skip:hover {
             background: rgba(79, 195, 247, 1);
             transform: scale(1.05);
+        }
+
+        /* Hammer Wheel UI - same bubble design as weapon wheel */
+        #hammerWheelUI {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            height: 400px;
+            display: none;
+            z-index: 1000;
+            pointer-events: none;
+        }
+        #hammerWheelUI.active { display: block; }
+        .hammer-wheel-container { position: relative; width: 100%; height: 100%; }
+        .hammer-wheel-item {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(30, 20, 10, 0.9) 0%, rgba(46, 36, 26, 0.9) 100%);
+            border: 3px solid #ffc107;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            transform-origin: 200px 200px;
+            pointer-events: auto;
+            box-shadow: 0 0 15px rgba(255, 193, 7, 0.4), inset 0 0 10px rgba(255, 193, 7, 0.1);
+        }
+        .hammer-wheel-item:hover {
+            background: linear-gradient(135deg, rgba(255, 193, 7, 0.4) 0%, rgba(255, 193, 7, 0.2) 100%);
+            transform: scale(1.15);
+            border-color: #ffd54f;
+        }
+        .hammer-wheel-item.selected {
+            background: linear-gradient(135deg, rgba(255, 193, 7, 0.6) 0%, rgba(255, 193, 7, 0.4) 100%);
+            border-color: #fff;
+            transform: scale(1.25);
+            box-shadow: 0 0 30px rgba(255, 193, 7, 1), 0 0 60px rgba(255, 193, 7, 0.6);
+        }
+        .hammer-wheel-item-name { font-size: 0.65em; color: #fff; text-align: center; font-weight: bold; }
+        .hammer-wheel-item-durability { font-size: 0.55em; color: #ffd54f; margin-top: 2px; }
+        .hammer-wheel-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(30, 20, 10, 0.95) 0%, rgba(46, 36, 26, 0.95) 100%);
+            border: 3px solid #ffc107;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffc107;
+            font-weight: bold;
+            pointer-events: none;
+            box-shadow: 0 0 25px rgba(255, 193, 7, 0.6), 0 0 50px rgba(255, 193, 7, 0.3);
         }
     </style>
     <!-- styles.css removed to prevent conflicts with dev mode layout -->
@@ -1291,6 +1416,26 @@
             </div>
             
             <div class="help-section">
+                <div class="help-section-title">Game Controls</div>
+                <div class="shortcut-item">
+                    <span class="shortcut-key">Tab</span>
+                    <span class="shortcut-desc">Weapon wheel (R3 on gamepad)</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-key">Q</span>
+                    <span class="shortcut-desc">Hammer: equip, repair bubble (L3 on gamepad)</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-key">E</span>
+                    <span class="shortcut-desc">Inventory (LB on gamepad)</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-key">C</span>
+                    <span class="shortcut-desc">Boost (LT on gamepad)</span>
+                </div>
+            </div>
+            
+            <div class="help-section">
                 <div class="help-section-title">Quick Actions</div>
                 <div class="shortcut-item">
                     <span class="shortcut-key">ESC</span>
@@ -1331,8 +1476,8 @@
             </div>
         </div>
 
-        <!-- Materials Inventory Panel (compact) -->
-        <div id="materialsInventory">
+        <!-- Materials Inventory Panel (hidden during preload/cutscene, visible during gameplay) -->
+        <div id="materialsInventory" class="intro-hidden">
             <h3>Materials</h3>
             <div class="stat-item">
                 <span class="stat-label">Electrons:</span>
@@ -1386,10 +1531,9 @@
             </div>
             <div style="margin-bottom: 15px;">
                 <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Repair System</h4>
-                <p><span class="key">Q</span> (hold) to show repair selection</p>
-                <p><span class="key">Mouse Wheel</span> (while Q held) to select item</p>
-                <p><span class="key">Click</span> item to repair (requires hammer)</p>
-                <p><span class="key">Q</span> (tap) to equip/use hammer</p>
+                <p><span class="key">Q</span> to equip hammer (first press)</p>
+                <p><span class="key">Q</span> again to open repair bubble (items that need repair)</p>
+                <p><span class="key">Click</span> item in bubble to repair (or <span class="key">Mouse Wheel</span> to select)</p>
             </div>
             <div style="margin-bottom: 15px;">
                 <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Game Modes</h4>
@@ -1421,6 +1565,11 @@
                 <p id="saveHint" style="color: #aaa; font-size: 0.85em; margin-top: 5px; display: none;">
                     💡 Hidden sequence unlocked! Press <span class="key">V</span> to revert to 2 levels back.
                 </p>
+            </div>
+            <div style="margin-bottom: 15px;">
+                <h4 style="color: #4fc3f7; font-size: 1em; margin-bottom: 8px;">Gamepad</h4>
+                <p><strong>R3</strong> Weapon wheel | <strong>L3</strong> Hammer | <strong>LT</strong> Boost | <strong>LB</strong> Inventory</p>
+                <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">Full mapping in Tutorial &gt; Controls. Sensitivity in Settings.</p>
             </div>
             <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #4fc3f7;">
                 <button onclick="game.showTutorial();" style="background: #9c27b0; color: #fff; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(156, 39, 176, 0.3);">
@@ -1522,7 +1671,7 @@
             <div class="shop-section">
                 <h3>Audio Settings</h3>
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
-                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                    <label for="masterVolumeSlider" style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
                         Master Volume: <span id="masterVolumeValue">70</span>%
                     </label>
                     <input type="range" id="masterVolumeSlider" min="0" max="100" value="70" step="5" 
@@ -1530,7 +1679,7 @@
                            oninput="game.audio.setVolume('master', this.value / 100); document.getElementById('masterVolumeValue').textContent = this.value;">
                 </div>
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
-                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                    <label for="musicVolumeSlider" style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
                         Music Volume: <span id="musicVolumeValue">60</span>%
                     </label>
                     <input type="range" id="musicVolumeSlider" min="0" max="100" value="60" step="5" 
@@ -1538,7 +1687,7 @@
                            oninput="game.audio.setVolume('music', this.value / 100); document.getElementById('musicVolumeValue').textContent = this.value;">
                 </div>
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
-                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                    <label for="sfxVolumeSlider" style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
                         Sound Effects Volume: <span id="sfxVolumeValue">80</span>%
                     </label>
                     <input type="range" id="sfxVolumeSlider" min="0" max="100" value="80" step="5" 
@@ -1546,7 +1695,7 @@
                            oninput="game.audio.setVolume('sfx', this.value / 100); document.getElementById('sfxVolumeValue').textContent = this.value;">
                 </div>
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
-                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                    <label for="voiceVolumeSlider" style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
                         Voice Volume: <span id="voiceVolumeValue">70</span>%
                     </label>
                     <input type="range" id="voiceVolumeSlider" min="0" max="100" value="70" step="5" 
@@ -1558,7 +1707,7 @@
             <div class="shop-section">
                 <h3>Gamepad Controls</h3>
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
-                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
+                    <label for="sensitivitySlider" style="color: #4fc3f7; font-weight: bold; margin-bottom: 10px; display: block;">
                         Cursor Sensitivity: <span id="sensitivityValue">600</span>
                     </label>
                     <input type="range" id="sensitivitySlider" min="100" max="2000" value="600" step="50" 
@@ -1566,6 +1715,9 @@
                            oninput="game.updateSetting('gamepadSensitivity', parseInt(this.value)); document.getElementById('sensitivityValue').textContent = this.value;">
                     <p style="color: #aaa; font-size: 0.85em; margin-top: 5px;">
                         Adjust how fast the cursor moves with the right joystick (100 = slow, 2000 = very fast)
+                    </p>
+                    <p style="color: #4fc3f7; font-size: 0.85em; margin-top: 8px;">
+                        R3=Weapon wheel | L3=Hammer | LT=Boost | LB=Inventory | Right Stick Y=Scroll menus
                     </p>
                 </div>
             </div>
@@ -1584,7 +1736,7 @@
                     </p>
                 </div>
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
-                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                    <label for="playerNameInputDevSettings" style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
                         Player Name
                     </label>
                     <input id="playerNameInputDevSettings" type="text"
@@ -1596,7 +1748,7 @@
                     </p>
                 </div>
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
-                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                    <label for="fpsCapSelect" style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
                         FPS Cap
                     </label>
                     <select id="fpsCapSelect" onchange="game.updateSetting('fpsCap', this.value === 'unlimited' ? 'unlimited' : (this.value === 'vsync' ? 'vsync' : parseInt(this.value)));"
@@ -1624,6 +1776,7 @@
                         Toggle backgrounds/grids; disable for better performance on older systems.
                     </p>
                 </div>
+
             </div>
             
             <div class="shop-section">
@@ -1640,7 +1793,7 @@
                     </p>
                 </div>
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
-                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                    <label for="particlesQualitySelect" style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
                         Particle Quality
                     </label>
                     <select id="particlesQualitySelect" onchange="game.updateSetting('particlesQuality', this.value);"
@@ -1655,7 +1808,7 @@
                     </p>
                 </div>
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
-                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                    <label for="pairEffectsQualitySelect" style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
                         Pair Effects Quality
                     </label>
                     <select id="pairEffectsQualitySelect" onchange="game.updateSetting('pairEffectsQuality', this.value);"
@@ -1669,7 +1822,7 @@
                     </p>
                 </div>
                 <div class="craft-item" style="flex-direction: column; align-items: flex-start;">
-                    <label style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
+                    <label for="graphicsPresetSelect" style="color: #4fc3f7; font-weight: bold; margin-bottom: 6px; display: block;">
                         Graphics Preset
                     </label>
                     <select id="graphicsPresetSelect" onchange="game.updateSetting('graphicsPreset', this.value);"
@@ -1695,14 +1848,18 @@
             </div>
         </div>
 
-        <!-- Repair Selection UI -->
-        <div id="repairSelectionUI">
-            <h3>Select Item to Repair (Q + Mouse Wheel)</h3>
-            <div id="repairSelectionList"></div>
+        <!-- Hammer Wheel UI - same bubble design as weapon wheel (Tab) -->
+        <div id="hammerWheelUI">
+            <div class="hammer-wheel-container" id="hammerWheelContainer">
+                <div class="hammer-wheel-center">REPAIR</div>
+            </div>
         </div>
 
         <!-- Level Up Continue Button -->
         <div id="levelUpContinueUI" style="display: none;">
+            <p id="levelUpControlsHint" style="color: #aaa; font-size: 0.85em; margin-bottom: 12px; text-align: center;">
+                D-Pad: Navigate panels | A: Select | Start: Continue
+            </p>
             <button onclick="game.continueFromLevelUp();" style="background: #4caf50; color: white; border: none; padding: 15px 40px; font-size: 1.3em; border-radius: 8px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4); transition: all 0.3s;">
                 Continue to Next Level
             </button>
@@ -1723,7 +1880,7 @@
         <div class="dev-section">
             <h3>Level Control</h3>
             <label>Jump to Level:</label>
-            <input type="number" id="devLevelInput" min="1" value="1">
+            <input type="number" id="devLevelInput" min="1" value="1" style="width: 100px; padding: 5px; margin: 5px 0;">
             <button onclick="window.game?.devSetLevel()">Go to Level</button>
             <button onclick="window.game?.devNextLevel()">Next Level</button>
             <button onclick="window.game?.devPrevLevel()">Previous Level</button>
@@ -1764,7 +1921,22 @@
                 <option value="2">Boss 2: DNA Helix (Level 30)</option>
                 <option value="3">Boss 3: Protein Complex (Level 45)</option>
                 <option value="4">Boss 4: Cell Membrane (Level 60)</option>
-                <option value="5">Boss 5+: Advanced (Level 75+)</option>
+                <option value="5">Boss 5: Advanced (Level 75)</option>
+                <option value="6">Boss 6: Advanced (Level 90)</option>
+                <option value="7">Boss 7: Advanced (Level 105)</option>
+                <option value="8">Boss 8: Advanced (Level 120)</option>
+                <option value="9">Boss 9: Advanced (Level 135)</option>
+                <option value="10">Boss 10: Advanced (Level 150)</option>
+                <option value="11">Boss 11: Advanced (Level 165)</option>
+                <option value="12">Boss 12: Advanced (Level 180)</option>
+                <option value="13">Boss 13: Advanced (Level 195)</option>
+                <option value="14">Boss 14: Advanced (Level 210)</option>
+                <option value="15">Boss 15: Advanced (Level 225)</option>
+                <option value="16">Boss 16: Advanced (Level 240)</option>
+                <option value="17">Boss 17: Advanced (Level 255)</option>
+                <option value="18">Boss 18: Advanced (Level 270)</option>
+                <option value="19">Boss 19: Advanced (Level 285)</option>
+                <option value="20">Boss 20: Advanced (Level 300)</option>
             </select>
             <button onclick="window.game?.devSpawnSpecificBoss()">Spawn Selected Boss</button>
             <button onclick="window.game?.devSpawnBoss()">Spawn Current Boss</button>
@@ -1954,21 +2126,53 @@
                     <h3>🎒 Inventory & Menus</h3>
                     <ul>
                         <li><span class="key">E</span> - Equipment/Inventory (equip items anytime)</li>
-                        <li><span class="key">C</span> - Crafting menu (during level-up only)</li>
-                        <li><span class="key">U</span> - Upgrade shop (during level-up only)</li>
+                        <li><span class="key">U</span> - Upgrade shop (during level-up - switch to shop tab)</li>
                         <li><span class="key">ESC</span> - Pause / Show all panels</li>
                         <li><span class="key">L</span> - Leaderboard</li>
                     </ul>
+                    <p style="color: #aaa; font-size: 0.9em; margin-top: 8px;">💡 Crafting & Upgrade Shop appear automatically during level-up.</p>
                 </div>
                 
                 <div class="tutorial-section">
                     <h3>🔧 Special Actions</h3>
                     <ul>
-                        <li><span class="key">Q</span> (hold) - Show repair selection (requires hammer)</li>
-                        <li><span class="key">Q</span> (tap) - Equip/use hammer tool</li>
+                        <li><span class="key">Q</span> - Equip hammer, then toggle repair bubble (same design as Tab)</li>
                         <li><span class="key">H</span> - Use health pack</li>
                         <li><span class="key">X</span> - Use atom split (clears screen)</li>
+                        <li><span class="key">C</span> - Activate boost (survival - uses methane)</li>
+                        <li><span class="key">E</span> - Eat food (during gameplay - eats best available)</li>
                         <li><span class="key">1/2/3</span> - Switch game modes</li>
+                    </ul>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>🎮 Gamepad Controls (Xbox/PlayStation)</h3>
+                    <p style="color: #aaa; font-size: 0.9em; margin-bottom: 10px;">All keyboard actions are mapped to controller. Adjust cursor sensitivity in Settings.</p>
+                    <ul>
+                        <li><strong>Left Stick</strong> - Move | <strong>Right Stick</strong> - Aim</li>
+                        <li><strong>RT/RB/A</strong> - Shoot | <strong>LT</strong> - Boost (C)</li>
+                        <li><strong>R3</strong> (Right stick click) - Weapon wheel (Tab)</li>
+                        <li><strong>L3</strong> (Left stick click) - Hammer (Q): equip, then repair bubble</li>
+                        <li><strong>LB</strong> - Inventory (E) | <strong>B</strong> - Back/Close</li>
+                        <li><strong>X</strong> - Health pack (H) | <strong>Y</strong> - Atom split (X)</li>
+                        <li><strong>D-Pad Up/Down</strong> - Navigate weapon/hammer wheel; scroll menus (when not in level-up)</li>
+                        <li><strong>Right Stick Y</strong> - Scroll menus (crafting, shop, tutorial, settings, etc.)</li>
+                        <li><strong>D-Pad Down</strong> - Eat food (E) | <strong>D-Pad Left/Right</strong> - Mode switch (when stick idle)</li>
+                        <li><strong>Start</strong> - Pause | <strong>Back</strong> - Leaderboard (L)</li>
+                        <li><strong>A/Start</strong> - Restart (game over)</li>
+                    </ul>
+                </div>
+                
+                <div class="tutorial-section">
+                    <h3>📋 Level-Up Menu (Crafting & Shop)</h3>
+                    <p style="color: #aaa; font-size: 0.9em; margin-bottom: 10px;">When leveling up, the focused panel glows so you know where you are.</p>
+                    <ul>
+                        <li><strong>D-Pad Left/Right</strong> - Switch between Crafting (left) and Shop (right) panels</li>
+                        <li><strong>D-Pad Up/Down</strong> - Navigate items within the current panel</li>
+                        <li><strong>D-Pad Down</strong> at bottom of Shop - Go to Continue button</li>
+                        <li><strong>D-Pad Up</strong> on Continue - Go back to Shop</li>
+                        <li><strong>Start</strong> - Quick Continue (exit level-up immediately)</li>
+                        <li><strong>A</strong> - Select/Buy/Craft the highlighted item</li>
                     </ul>
                 </div>
             </div>
@@ -2210,7 +2414,7 @@
                     
                     <div class="item-description">
                         <strong>🎯 Critical Hit Chance</strong>
-                        <p>Increases critical hit chance by +2% per upgrade (caps at 100%). Critical hits deal bonus damage based on your Critical Hit Damage stat. Stacks with Transformation Time Scanner upgrade.</p>
+                        <p>Increases critical hit chance by +2% per upgrade. Critical hits deal bonus damage based on your Critical Hit Damage stat. Stacks with Transformation Time Scanner upgrade.</p>
                         <p><strong>Cost:</strong> Starts at 30 tokens, increases by 5 per upgrade</p>
                     </div>
                     
@@ -2224,7 +2428,7 @@
                     
                     <div class="item-description">
                         <strong>🛡️ Shield Capacity</strong>
-                        <p>Increases shield capacity by +5% per upgrade (caps at 100% bonus). This percentage bonus applies to ALL shields you equip, making high-tier shields even more powerful. Essential for tank builds.</p>
+                        <p>Increases shield capacity by +5% per upgrade. This percentage bonus applies to ALL shields you equip, making high-tier shields even more powerful. Essential for tank builds.</p>
                         <p><strong>Cost:</strong> Starts at 30 tokens, increases by 5 per upgrade</p>
                     </div>
                     
@@ -2236,13 +2440,13 @@
                     
                     <div class="item-description">
                         <strong>🛡️ Damage Reduction</strong>
-                        <p>Reduces incoming damage by +1% per upgrade (caps at 50%). This applies to ALL damage sources - enemy bullets, collisions, and boss attacks. Stacks with ship damage resistance bonuses.</p>
+                        <p>Reduces incoming damage by +1% per upgrade. This applies to ALL damage sources - enemy bullets, collisions, and boss attacks. Stacks with ship damage resistance bonuses.</p>
                         <p><strong>Cost:</strong> Starts at 40 tokens, increases by 5 per upgrade</p>
                     </div>
                     
                     <div class="item-description">
                         <strong>✨ Evasion</strong>
-                        <p>Increases dodge chance by +1% per upgrade (caps at 30%). When you dodge, you take no damage from that attack. Stacks with ship evasion bonuses. Perfect for agile playstyles.</p>
+                        <p>Increases dodge chance by +1% per upgrade. When you dodge, you take no damage from that attack. Stacks with ship evasion bonuses. Perfect for agile playstyles.</p>
                         <p><strong>Cost:</strong> Starts at 40 tokens, increases by 5 per upgrade</p>
                     </div>
                     
@@ -2262,7 +2466,7 @@
                     
                     <div class="item-description">
                         <strong>⏱️ Level Time Reduction</strong>
-                        <p>Reduces the time needed per level by +3% per upgrade (max 40%). Each level normally requires 30 seconds of gameplay. With this upgrade, you'll level up faster, getting more opportunities for upgrades and crafting. At maximum (40% reduction), levels take 18 seconds each (minimum 10 seconds guaranteed).</p>
+                        <p>Reduces the time needed per level by +3% per upgrade. Each level normally requires 30 seconds of gameplay. With this upgrade, you'll level up faster, getting more opportunities for upgrades and crafting (minimum 10 seconds per level guaranteed).</p>
                         <p><strong>Cost:</strong> Starts at 45 tokens, increases by 7 per upgrade</p>
                     </div>
                     
@@ -2433,6 +2637,9 @@
 
     <!-- Level Up Continue Button (Bottom UI) -->
     <div id="levelUpContinueUI" style="display: none;">
+        <p id="levelUpControlsHint" style="color: #aaa; font-size: 0.85em; margin-bottom: 12px; text-align: center;">
+            D-Pad: Navigate panels | A: Select | Start: Continue
+        </p>
         <button onclick="game.continueFromLevelUp();" style="background: #4caf50; color: white; border: none; padding: 15px 40px; font-size: 1.3em; border-radius: 8px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4); transition: all 0.3s;">
             Continue to Next Level
         </button>
@@ -2457,12 +2664,7 @@
     </script>
     <script src="config.js"></script>
     <script src="game.js"></script>
-    <script>
-        // Initialize game after scripts load
-        window.addEventListener('DOMContentLoaded', () => {
-            window.game = new SpaceShooterGame();
-        });
-    </script>
+    <!-- Game init: game.js creates on DOMContentLoaded when DEV_MODE (cutscenes first, full preload during SpaceBell puzzle) -->
     <script>
         if ('serviceWorker' in navigator && location.protocol !== 'file:') {
             window.addEventListener('load', () => {

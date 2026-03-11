@@ -22,9 +22,11 @@
 - Data is stored in `server/leaderboard.json` (file-based, no DB).
 
 ## Controls (player-facing)
-- Move: WASD / arrows. Shoot: hold mouse. Pause: Space. Reset: R.
-- Modes: keys `1` (Ensemble QM), `2` (Individual System), `3` (Bell Pairs).
-- UI panels: crafting/inventory/shop/level-up via on-screen buttons; click canvas to create systems (tutorial states).
+- **Move:** WASD / arrows. **Aim:** Mouse. **Shoot:** Click or Space.
+- **Tab** - Weapon wheel. **Q** - Hammer (equip, repair bubble). **E** - Inventory. **C** - Boost.
+- **H** - Health pack. **X** - Atom split. **ESC** - Pause. **R** - Restart (game over).
+- **Modes:** `1` (Ensemble QM), `2` (Individual System), `3` (Bell Pairs).
+- **Gamepad:** Full support. R3=Weapon wheel, L3=Hammer, LT=Boost, LB=Inventory. Sensitivity in Settings.
 
 ## Key files
 - `index.html`, `index-dev.html`: HTML shells and UI styling.

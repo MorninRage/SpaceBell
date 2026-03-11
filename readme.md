@@ -5,15 +5,15 @@ An interactive HTML5 game demonstrating the distinction between Ensemble Quantum
 ## How to Play
 
 1. **Open `index.html`** in any modern web browser
-2. **Click** on the canvas to create systems
-3. **Switch modes** using buttons or keyboard:
-   - `1` or click "Ensemble QM" - See statistical predictions
-   - `2` or click "Individual System" - See definite properties
-   - `3` or click "Bell Pairs" - See correlated pairs
-4. **Controls:**
-   - `Space` - Pause/Resume
-   - `R` - Reset
-   - `Click` - Create new systems
+2. **Switch modes** using buttons or keyboard: `1` (Ensemble QM), `2` (Individual System), `3` (Bell Pairs)
+3. **Controls:**
+   - **Movement:** WASD or Arrow Keys
+   - **Aim/Shoot:** Mouse to aim, Click or Space to shoot
+   - **Tab** - Weapon wheel (equip weapons, eat food)
+   - **Q** - Hammer (equip, then repair bubble)
+   - **E** - Inventory | **C** - Boost | **H** - Health pack | **X** - Atom split
+   - **ESC** - Pause | **R** - Restart (game over)
+   - **Gamepad:** Full support - R3=Weapon wheel, L3=Hammer, LT=Boost, LB=Inventory. See in-game Tutorial for full mapping.
 
 ## Game Modes
 
@@ -48,8 +48,11 @@ This game visualizes the key argument:
 - No external dependencies
 - Responsive design
 - Real-time physics simulation
+- **Performance optimizations**: Molecule rendering uses health bucket system and gradient caching (60-80% reduction in gradient creation). Particle rendering uses gradient caching for collision effects (70-85% reduction). Preshader/prerendering system for off-canvas caching of visual effects.
+- **Character rendering**: High-fidelity character system with three-point lighting, realistic proportions, detailed features (35 hair strands, 7 hair spikes, 30 mustache hairs, 4 fingers per hand), and physics-based animations (breathing, hair movement, blinking). Used for Einstein and Bell characters in cutscenes.
+- **Cutscenes**: Enhanced tutorial intro cutscene ("Welcome, Pilot!") with realistic deep space background, nebula clouds, quantum energy effects, high-fidelity characters, enhanced ship, and stunning animated text boxes.
 - Boss logic: for the level 60 Cell Membrane boss, destroyed membranes are removed from collision, damage gates are reinforced with per-part `canTakeDamage`, and a soft-lock fail-safe advances the phase if no progress is detected (outer → inner → nucleus). A UI-only boss debug overlay exists for troubleshooting but is disabled by default.
-- Debug overlay: a lightweight, UI-only boss debug overlay can be toggled by setting `this.showBossDebugOverlay = true` in `SpaceShooterGame` (e.g., near its initialization). By default it’s off; when enabled it renders top-right during boss fights and shows bossEnemies count, puzzle flags, and per-part health/canTakeDamage. It has no gameplay impact.
+- Debug overlay: a lightweight, UI-only boss debug overlay can be toggled by setting `this.showBossDebugOverlay = true` in `SpaceShooterGame` (e.g., near its initialization). By default it's off; when enabled it renders top-right during boss fights and shows bossEnemies count, puzzle flags, and per-part health/canTakeDamage. It has no gameplay impact.
 
 ## Deployment
 
